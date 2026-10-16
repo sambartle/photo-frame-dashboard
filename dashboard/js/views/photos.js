@@ -17,6 +17,7 @@
         V.el = el;
         el.innerHTML = '<div class="photos">' +
           '<div class="ph-stage"></div>' +
+          '<div class="ph-empty serif" hidden>No photos yet.<br><i>Add some from your phone at <b>' + location.host + '/upload</b></i></div>' +
           '<button class="ph-zone ph-zone--l" data-prev aria-label="Previous"></button>' +
           '<button class="ph-zone ph-zone--c" data-loud aria-label="Show details"></button>' +
           '<button class="ph-zone ph-zone--r" data-next aria-label="Next"></button>' +
@@ -45,13 +46,15 @@
             if (!p) return;
             p.fav = !p.fav;
             heart();
+            App.write('state', 'PATCH', '/photos/' + p.id, { fav: p.fav });
             App.toast(p.fav ? 'Added to favourites · it’ll show up more often' : 'Removed from favourites', { icon: 'heart', ms: 2500 });
           }
         });
       }
+      el.querySelector('.ph-empty').hidden = !!window.DATA.photos.length;
       V.show.start();
     },
-    resume: function () { V.show.start(); },
+    resume: function () { V.el.querySelector('.ph-empty').hidden = !!window.DATA.photos.length; V.show.start(); },
     hide: function () { if (V.show) V.show.stop(); }
   });
 })();

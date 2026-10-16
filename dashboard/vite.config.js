@@ -8,6 +8,8 @@ export default defineConfig({
   build: {
     target: 'chrome106',
     cssTarget: 'chrome61',
+    rollupOptions: { input: { main: 'index.html', upload: 'upload.html' } },
   },
-  server: { host: true },
+  // `npm run dev` serves the UI; /api goes to `npm run dev:api` (wrangler dev, local D1 + R2).
+  server: { host: true, proxy: { '/api': 'http://localhost:8787' } },
 });

@@ -1,8 +1,22 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
+  // Deploys to YOUR Cloudflare account (npx wrangler login), at home-dashboard.<your-subdomain>.workers.dev.
+  // Rename it here if you like. See README.md for the one-time setup.
   "name": "home-dashboard",
+  "main": "worker/index.js",
   "compatibility_date": "2026-09-30",
   "assets": {
-    "directory": "./dist"
-  }
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // The Worker sees every request so ?key=… works on any page; it hands non-API paths to ASSETS.
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    // `npx wrangler d1 create home-hq` prints the database_id to paste here.
+    { "binding": "DB", "database_name": "home-hq", "database_id": "REPLACE_WITH_YOUR_D1_ID", "migrations_dir": "migrations" }
+  ],
+  "r2_buckets": [
+    { "binding": "PHOTOS", "bucket_name": "home-hq-photos" }
+  ],
+  "observability": { "enabled": true }
 }

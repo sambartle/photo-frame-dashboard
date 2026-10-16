@@ -65,9 +65,11 @@ Settings → About before you follow any guide:
 
 ## The dashboard
 
-[`dashboard/`](dashboard) is the family dashboard we run on the BIUFRAME (it uses mock data): a Vite
-web app deployed to Cloudflare Workers. `dashboard/kiosk/` is a small full-screen WebView Android app,
-built without Gradle, that shows it. Hold two fingers still for 1.5 s to open a menu for the
+[`dashboard/`](dashboard) is the family dashboard we run on the BIUFRAME: a Vite web app and a
+Cloudflare Worker you deploy to your own free Cloudflare account. It shows Google Calendar (ICS),
+Open-Meteo weather, chores and a shared shopping list (D1), photos uploaded from a phone (R2), and
+optional Home Assistant controls and alerts. Setup is in the [dashboard guide](dashboard/README.md).
+`dashboard/kiosk/` is a small full-screen WebView Android app, built without Gradle, that shows it. Hold two fingers still for 1.5 s to open a menu for the
 launcher, Android settings, and reloading. On frames without system navigation, optional floating
 **Back** and **Dashboard** buttons help; see the [kiosk guide](dashboard/kiosk/README.md).
 

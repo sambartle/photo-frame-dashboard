@@ -3,11 +3,8 @@
   'use strict';
   var D = window.DATA;
 
-  function src(p, big) {
-    var w = p.o === 'p' ? 800 : 1600, h = p.o === 'p' ? 1200 : 1000;
-    if (!big) { w = Math.round(w / 2); h = Math.round(h / 2); }
-    return App.img(p.seed, w, h);
-  }
+  // Uploads are stored twice: full (max 1920 px) and small (max 960 px, for blur fills + the home tile).
+  function src(p, big) { return '/api/photos/' + p.id + (big ? '' : '?s=1'); }
   App.photoSrc = src;
 
   function parseDate(p) { var a = p.date.split('-'); return new Date(+a[0], +a[1] - 1, +a[2]); }
@@ -19,7 +16,7 @@
     return {
       date: App.fmt.month(d) + ' ' + d.getDate() + ', ' + d.getFullYear(),
       monthYear: App.fmt.month(d) + ' ' + d.getFullYear(),
-      kicker: kicker, onThisDay: onThisDay, place: p.place, from: App.person(p.from)
+      kicker: kicker, onThisDay: onThisDay, place: p.place || '', from: App.person(p.from)
     };
   };
 
@@ -31,7 +28,7 @@
   function caption(ps, size) {
     var m = App.photoMeta(ps[0]);
     return '<div class="cap cap--' + (size || 'l') + '">' +
-      '<div class="cap-kicker">' + (m.onThisDay ? '<b>On this day</b> · ' : '') + m.kicker + ' · ' + App.esc(m.place) + '</div>' +
+      '<div class="cap-kicker">' + (m.onThisDay ? '<b>On this day</b> · ' : '') + m.kicker + (m.place ? ' · ' + App.esc(m.place) : '') + '</div>' +
       '<div class="cap-date serif">' + (ps.length > 1 ? m.monthYear : m.date) + '</div>' +
       '</div>';
   }
@@ -59,7 +56,7 @@
       var p = ps[0], m = App.photoMeta(p), rot = (Math.random() * 5 - 2.5).toFixed(1);
       return '<div class="slide slide--polaroid"><img class="blurfill" src="' + src(p) + '" alt="">' +
         '<figure class="polaroid polaroid--' + p.o + '" style="transform:rotate(' + rot + 'deg)"><div class="polaroid-img"><img src="' + src(p, true) + '" alt=""></div>' +
-        '<figcaption class="serif"><i>' + App.esc(m.place) + ', ' + m.monthYear + '</i></figcaption></figure></div>';
+        '<figcaption class="serif"><i>' + (m.place ? App.esc(m.place) + ', ' : '') + m.monthYear + '</i></figcaption></figure></div>';
     }
   };
 
@@ -98,15 +95,17 @@
       if (first.o === 'p') layout = D.photos.some(function (x) { return x !== first && x.tag === first.tag; }) ? 'pair' : 'polaroid';
       else layout = n % 5 === 3 ? 'collage' : n % 5 === 4 ? 'polaroid' : 'cover';
     }
-    var ps = [first];
+    var ps = [first], orig = first;
     if (layout === 'pair') {
-      if (first.o !== 'p') { first = sibling(function (x) { return x.o === 'p'; }); ps = [first]; }
+      if (first.o !== 'p') { first = sibling(function (x) { return x.o === 'p'; }) || orig; ps = [first]; }
       ps.push(sibling(function (x) { return x !== first && x.o === 'p' && x.tag === first.tag; }) || sibling(function (x) { return x !== first && x.o === 'p'; }));
     }
     if (layout === 'collage') {
       ps.push(sibling(function (x) { return x !== first; }));
       ps.push(sibling(function (x) { return ps.indexOf(x) < 0; }));
     }
+    // Small libraries: fall back to a single photo when there aren't enough to fill the layout.
+    if (ps.some(function (x) { return !x; }) || (layout === 'pair' && ps[0].o !== 'p')) { layout = 'cover'; ps = [orig]; }
     return { layout: layout, photos: ps };
   };
 

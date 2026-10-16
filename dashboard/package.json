@@ -5,12 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "wrangler dev --port 8787",
     "build": "vite build",
     "preview": "vite preview",
+    "db:migrate": "wrangler d1 migrations apply home-hq --remote",
+    "db:migrate:local": "wrangler d1 migrations apply home-hq --local",
     "deploy": "vite build && wrangler deploy"
   },
   "devDependencies": {
     "vite": "^8.3.1",
     "wrangler": "^4.145.0"
+  },
+  "dependencies": {
+    "ical.js": "^2.2.1"
   }
 }

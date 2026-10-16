@@ -6,7 +6,8 @@
 
   function open() { return D.groceries.filter(function (g) { return !g.done && (V.store === 'all' || g.store === V.store); }); }
   function done() { return D.groceries.filter(function (g) { return g.done && (V.store === 'all' || g.store === V.store); }); }
-  function storeName(id) { return D.stores.filter(function (s) { return s.id === id; })[0].name; }
+  function storeName(id) { var s = D.stores.filter(function (x) { return x.id === id; })[0]; return s ? s.name : ''; }
+  function save(g) { App.write('state', 'POST', '/groceries', g); }
 
   function categorize(name) {
     var n = name.toLowerCase();
@@ -24,14 +25,14 @@
       '<button class="s-hit" data-check="' + g.id + '">' +
       '<span class="s-box">' + App.icon('check', 22) + '</span>' +
       '<span class="s-name"><b>' + App.esc(g.name) + '</b>' + (g.note ? '<small>' + App.esc(g.note) + '</small>' : '') + '</span>' +
-      (V.store === 'all' && g.store === 'costco' ? '<span class="s-store">Costco</span>' : '') +
+      (V.store === 'all' && D.stores.length > 1 && g.store !== D.stores[0].id ? '<span class="s-store">' + App.esc(storeName(g.store)) + '</span>' : '') +
       '</button>' +
       '<div class="s-qty"><button data-qty="-1" data-id="' + g.id + '" aria-label="Less">' + App.icon('minus', 22) + '</button><span class="num">' + g.qty + '</span><button data-qty="1" data-id="' + g.id + '" aria-label="More">' + App.icon('plus', 22) + '</button></div>' +
       '</div>';
   }
 
   function listHTML() {
-    var items = open(), order = D.catOrder[V.store].concat(['Other']);
+    var items = open(), order = (D.catOrder[V.store] || D.catOrder.all).filter(function (c) { return c !== 'Other'; }).concat(['Other']);
     var groups = order.map(function (cat) { return { cat: cat, items: items.filter(function (g) { return g.cat === cat; }) }; }).filter(function (x) { return x.items.length; });
     var d = done();
     return (items.length ? groups.map(function (gr) {
@@ -151,7 +152,7 @@
       paintList();
     } else {
       var cat = D.catalog.filter(function (c) { return c[0].toLowerCase() === name.toLowerCase(); })[0];
-      g = { id: D._gid(), name: cat ? cat[0] : name.charAt(0).toUpperCase() + name.slice(1), cat: categorize(name), qty: 1, store: V.store === 'all' ? 'grocer' : V.store, done: false, note: '' };
+      g = { id: App.uid(), name: cat ? cat[0] : name.charAt(0).toUpperCase() + name.slice(1), cat: categorize(name), qty: 1, store: V.store === 'all' ? D.stores[0].id : V.store, done: false, note: '' };
       D.groceries.push(g);
       msg = 'Added <b>' + App.esc(g.name) + '</b> to ' + g.cat;
       insertRow(g);
@@ -162,6 +163,7 @@
     if (input) input.value = '';
     if (hadQuery) paintSuggest(); else refreshSuggestFor(g);
     flash(g);
+    save(g);
     App.emit('data');
     App.toast(msg, { icon: 'cart', ms: 3000 });
   }
@@ -177,6 +179,7 @@
       removeRow(g);
       refreshSuggestFor(g);
       App.emit('data');
+      save(g);
     }, 1200);
     App.toast('<b>' + App.esc(g.name) + '</b> checked off', {
       icon: 'check',
@@ -188,6 +191,7 @@
         else { var r = V.el.querySelector('.s-list [data-id="' + g.id + '"]'); if (r) r.classList.remove('is-checking'); }
         refreshSuggestFor(g);
         App.emit('data');
+        if (wasDone) save(g);
       }
     });
   }
@@ -205,6 +209,8 @@
       q.qty = Math.max(1, q.qty + +t.dataset.qty);
       t.parentNode.querySelector('.num').textContent = q.qty;
       refreshSuggestFor(q);
+      clearTimeout(q._saveT);
+      q._saveT = setTimeout(function () { delete q._saveT; save(q); }, 600); // one save per burst of taps
       return;
     }
     if ((t = e.target.closest('[data-add]'))) return add(t.dataset.add);
@@ -212,16 +218,21 @@
     if ((t = e.target.closest('[data-drawer]'))) { V.drawer = !V.drawer; return paintList(); }
     if ((t = e.target.closest('[data-revive]'))) {
       var r = D.groceries.filter(function (x) { return x.id === t.dataset.revive; })[0];
-      r.done = false; paintList(); paintSuggest(); App.emit('data');
+      r.done = false; paintList(); paintSuggest(); App.emit('data'); save(r);
       return App.toast('Added back <b>' + App.esc(r.name) + '</b>', { icon: 'cart', ms: 2500 });
     }
     if ((t = e.target.closest('[data-clear]'))) {
       var gone = done();
+      var ids = gone.map(function (x) { return x.id; });
       D.groceries = D.groceries.filter(function (x) { return gone.indexOf(x) < 0; });
       V.drawer = false;
       paintList();
+      App.write('state', 'POST', '/groceries/clear', { ids: ids });
       App.toast('Cleared ' + gone.length + ' items', {
-        icon: 'check', undo: function () { D.groceries = D.groceries.concat(gone); paintList(); }
+        icon: 'check', undo: function () {
+          D.groceries = D.groceries.concat(gone); paintList();
+          App.write('state', 'POST', '/groceries/clear', { ids: ids, cleared: false });
+        }
       });
     }
   }

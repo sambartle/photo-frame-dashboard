@@ -104,3 +104,11 @@
 .cam-big .tk-live { left: 20px; top: 20px; }
 .cam-big-bar .label { position: absolute; left: 24px; bottom: 20px; }
 .is-pulse { box-shadow: 0 0 0 6px var(--warm); }
+
+/* Home Assistant states */
+.tile.is-offline { opacity: .45; pointer-events: none; }
+.hc-offline { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 18px 20px; border-radius: 18px; background: var(--card); color: var(--alert); }
+.hc-offline span { display: flex; flex-direction: column; color: inherit; }
+.hc-offline b { font-size: 20px; }
+.np-art--none { display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .06); }
+.hc-climate[hidden], .hc-media[hidden], .hc-scenes[hidden], .rail-item[hidden] { display: none; }

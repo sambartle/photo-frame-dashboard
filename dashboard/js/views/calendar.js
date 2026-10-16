@@ -88,7 +88,8 @@
     var day = V.date;
     var fam = App.timedOn(day).filter(App.isFamily);
     var allDay = App.allDayOn(day);
-    var ad = allDay.length ? '<div class="allday"><div class="gutter label">All day</div><div class="allday-grid">' + allDay.map(function (e) {
+    var cols = 'grid-template-columns:repeat(' + Math.max(1, D.people.length) + ',1fr)';
+    var ad = allDay.length ? '<div class="allday"><div class="gutter label">All day</div><div class="allday-grid" style="' + cols + '">' + allDay.map(function (e) {
       var fam2 = App.isFamily(e);
       var idx = D.people.map(function (p) { return p.id; }).indexOf(e.people[0]);
       var col = fam2 ? '1 / -1' : (idx + 1) + ' / span 1';
@@ -98,7 +99,7 @@
     }).join('') + '</div></div>' : '';
     var grid = '<div class="grid-scroll"><div class="grid" style="height:' + (END - START) * PX + 'px">' +
       '<div class="hours">' + hoursCol() + '</div>' +
-      '<div class="lanes">' + D.people.map(function (p) {
+      '<div class="lanes" style="' + cols + '">' + D.people.map(function (p) {
         var list = App.timedOn(day, p.id).filter(function (e) { return !App.isFamily(e); });
         return '<div class="lane" style="' + App.pstyle(p) + '">' + placeBlocks(list, null, p.id) + '</div>';
       }).join('') +
@@ -262,13 +263,27 @@
       '<h2 class="serif">' + App.esc(e.title) + '</h2>' +
       '<div class="evs-time num">' + (e.allDay ? 'All day' : App.fmt.range(e.start, e.end)) + '</div></div>' +
       '<div class="evs-body">' +
-      (e.travel ? '<div class="evs-row evs-leave">' + App.icon('car', 28) + '<div><b>Leave by ' + App.fmt.time(App.leaveBy(e)) + '</b><span>' + e.travel + ' min drive in current traffic</span></div></div>' : '') +
-      (e.loc ? '<div class="evs-row">' + App.icon('pin', 28) + '<div><b>' + App.esc(e.loc) + '</b><span>Tap to send directions to phone</span></div></div>' : '') +
+      (e.travel ? '<div class="evs-row evs-leave">' + App.icon('car', 28) + '<div><b>Leave by ' + App.fmt.time(App.leaveBy(e)) + '</b><span>' + e.travel + ' min to get there</span></div></div>' : '') +
+      (e.loc ? '<div class="evs-row">' + App.icon('pin', 28) + '<div><b>' + App.esc(e.loc) + '</b></div></div>' : '') +
       '<div class="evs-row">' + App.icon('person', 28) + '<div class="evs-people">' + (fam ? D.people : e.people.map(App.person)).map(function (x) {
         return '<span class="chip" style="' + App.pstyle(x) + '">' + App.avatar(x, 32) + x.name + '</span>';
       }).join('') + '</div></div>' +
       (e.notes ? '<div class="evs-notes serif">“' + App.esc(e.notes) + '”</div>' : '') +
-      '</div></div>', { cls: 'sheet--event' });
+      (e.local ? '<div class="sheet-actions"><span class="label">Added on this display</span><button class="btn btn--ghost" data-del>Remove</button></div>' : '') +
+      '</div></div>', {
+      cls: 'sheet--event',
+      onMount: function (s, close) {
+        var del = s.querySelector('[data-del]');
+        if (del) del.onclick = function () {
+          close();
+          D.events = D.events.filter(function (x) { return x !== e; });
+          if (V.el) render();
+          App.emit('data');
+          App.write('calendar', 'DELETE', '/events/' + e.id);
+          App.toast('Removed <b>' + App.esc(e.title) + '</b>', { icon: 'calendar' });
+        };
+      }
+    });
   };
 
   function moreSheet(ids) {
@@ -315,10 +330,10 @@
           if (!t) return;
           if (t.dataset.idea) { input.value = t.dataset.idea; }
           if (t.dataset.who) {
-            if (t.dataset.who === 'all') st.who = st.who.length === 4 ? [] : D.ALL.slice();
+            if (t.dataset.who === 'all') st.who = st.who.length === D.people.length ? [] : D.ALL.slice();
             else { var i = st.who.indexOf(t.dataset.who); if (i > -1) st.who.splice(i, 1); else st.who.push(t.dataset.who); }
             App.$$('[data-who]', s).forEach(function (b) {
-              b.classList.toggle('is-on', b.dataset.who === 'all' ? st.who.length === 4 : st.who.indexOf(b.dataset.who) > -1);
+              b.classList.toggle('is-on', b.dataset.who === 'all' ? st.who.length === D.people.length : st.who.indexOf(b.dataset.who) > -1);
             });
           }
           ['dayi', 'time', 'dur'].forEach(function (k) {
@@ -329,17 +344,21 @@
           });
           if (t.hasAttribute('data-save')) {
             var title = input.value.trim() || 'New event';
-            var who = st.who.length ? st.who.slice() : ['jordan'];
+            var who = st.who.length ? st.who.slice() : D.ALL.slice();
             var start = App.addDays(App.dayStart(now), st.day), p = st.time.split(':');
             start.setHours(+p[0], +p[1]);
-            var e = { id: D._eid(), title: title, people: who, start: start, end: new Date(+start + st.dur * 60000) };
+            var e = { id: App.uid(), title: title, people: who, start: start, end: new Date(+start + st.dur * 60000), local: true };
             D.events.push(e);
+            App.write('calendar', 'POST', '/events', { id: e.id, title: e.title, people: e.people, start: +e.start, end: +e.end });
             close();
             V.date = App.dayStart(start); V.mode = V.mode === 'month' ? 'day' : V.mode; V.scroll = null;
             render();
             App.emit('data');
             App.toast('Added <b>' + App.esc(title) + '</b> · ' + App.fmt.rel(start) + ' ' + App.fmt.time(start), {
-              icon: 'calendar', undo: function () { D.events.splice(D.events.indexOf(e), 1); render(); App.emit('data'); }
+              icon: 'calendar', undo: function () {
+                D.events.splice(D.events.indexOf(e), 1); render(); App.emit('data');
+                App.write('calendar', 'DELETE', '/events/' + e.id);
+              }
             });
           }
         });

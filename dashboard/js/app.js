@@ -1,8 +1,8 @@
-// Core shell: router, demo clock, idle/ambient, toasts, sheets, helpers.
+// Core shell: router, clock, idle/ambient, toasts, sheets, helpers.
 (function () {
   'use strict';
   var D = window.DATA;
-  var App = window.App = { state: D, views: {}, current: null, mode: 'day', calMode: 'normal' };
+  var App = window.App = { state: D, views: {}, current: null, mode: 'day' };
   var $ = App.$ = function (s, r) { return (r || document).querySelector(s); };
   App.$$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
@@ -11,7 +11,7 @@
   App.on = function (e, fn) { (handlers[e] = handlers[e] || []).push(fn); };
   App.emit = function (e, a) { (handlers[e] || []).forEach(function (fn) { fn(a); }); };
 
-  // ------------------------------------------------------------ time (demo clock)
+  // ------------------------------------------------------------ time (real; the controls drawer can preview another time)
   var offset = 0;
   App.now = function () { return new Date(Date.now() + offset); };
   App.setTime = function (h, m) {
@@ -89,14 +89,8 @@
   };
 
   // ------------------------------------------------------------ calendar helpers
-  App.events = function () {
-    var list = D.events.slice();
-    var today = App.dayStart(App.now());
-    if (App.calMode === 'busy') list = list.concat(D.busyExtras);
-    if (App.calMode === 'empty') list = list.filter(function (e) { return e.allDay || !App.sameDay(e.start, today); });
-    return list;
-  };
-  App.isFamily = function (e) { return e.people.length >= D.people.length; };
+  App.events = function () { return D.events; };
+  App.isFamily = function (e) { return D.people.length > 1 && e.people.length >= D.people.length; };
   App.evColor = function (e) { return App.isFamily(e) ? D.family : App.person(e.people[0]); };
   App.timedOn = function (day, pid) {
     var s = App.dayStart(day), e = App.addDays(s, 1);
@@ -126,33 +120,45 @@
   App.currentRoutine = function () {
     var h = App.now().getHours();
     for (var i = 0; i < D.routines.length; i++) if (h >= D.routines[i].from && h < D.routines[i].to) return D.routines[i];
-    return D.routines[2];
+    return D.routines[D.routines.length - 1];
   };
+  // Forecast hours start at local midnight on W.day and run for 48 hours.
+  function wxHour() {
+    var W = D.weather, a = W.day.split('-');
+    return Math.floor((App.now() - new Date(+a[0], +a[1] - 1, +a[2])) / 36e5);
+  }
+  var WX_LABEL = { sun: 'Sunny', moon: 'Clear', partly: 'Partly cloudy', cloud: 'Overcast', rain: 'Rain', snow: 'Snow' };
   App.weatherNow = function () {
-    var W = D.weather, h = App.now().getHours();
-    var rainAt = -1;
-    for (var i = h; i < 24; i++) if (W.p[i] >= 50) { rainAt = i; break; }
+    var W = D.weather;
+    if (!W) return null;
+    var h = Math.max(0, Math.min(W.t.length - 1, wxHour()));
+    var endOfDay = Math.min(W.t.length, h - App.now().getHours() + 24);
+    var wetAt = -1;
+    for (var i = h; i < endOfDay; i++) if (W.p[i] >= 50) { wetAt = i; break; }
+    var snow = wetAt > -1 && W.c[wetAt] === 'snow';
     var summary, advice;
-    if (rainAt === h) {
-      var stop = h; while (stop < 24 && W.p[stop] >= 50) stop++;
-      summary = 'Rain until ' + App.fmt.hour(new Date(2000, 0, 1, stop));
-      advice = 'Umbrella weather';
-    } else if (rainAt > -1) {
-      summary = 'Rain from ' + App.fmt.hour(new Date(2000, 0, 1, rainAt));
-      var soccer = App.timedOn(App.now()).filter(function (e) { return /soccer/i.test(e.title) && e.start > App.now(); })[0];
-      advice = soccer ? 'Pack a rain jacket for soccer' : 'Grab a rain jacket';
+    if (wetAt === h) {
+      var stop = h; while (stop < W.t.length && W.p[stop] >= 50) stop++;
+      summary = (snow ? 'Snow' : 'Rain') + ' until ' + App.fmt.hour(new Date(2000, 0, 1, stop % 24));
+      advice = snow ? 'Boots and gloves' : 'Umbrella weather';
+    } else if (wetAt > -1) {
+      summary = (snow ? 'Snow' : 'Rain') + ' from ' + App.fmt.hour(new Date(2000, 0, 1, wetAt % 24));
+      advice = snow ? 'Wrap up warm' : 'Grab a rain jacket';
     } else {
-      summary = W.t[h] < 12 ? 'Clear and cool' : 'Dry all day';
-      advice = W.t[h] < 12 ? 'Jacket weather' : 'Light layers';
+      var cool = W.t[h] < (W.units === 'fahrenheit' ? 54 : 12);
+      summary = cool ? 'Dry and cool' : 'Dry all day';
+      advice = cool ? 'Jacket weather' : 'Light layers';
     }
-    var labels = { sun: 'Sunny', moon: 'Clear', partly: 'Partly cloudy', cloud: 'Overcast', rain: 'Rain' };
-    return { temp: W.t[h], cond: W.c[h], label: labels[W.c[h]], hi: W.hi, lo: W.lo, summary: summary, advice: advice, hour: h };
+    var temp = h === wxHour() && W.now != null ? W.now : W.t[h];
+    return { temp: temp, cond: W.c[h], label: WX_LABEL[W.c[h]], hi: W.hi, lo: W.lo, summary: summary, advice: advice, hour: h };
   };
   App.hourly = function (count) {
-    var W = D.weather, h = App.now().getHours(), out = [];
-    for (var i = 0; i < count; i++) {
+    var W = D.weather, out = [];
+    if (!W) return out;
+    var h = Math.max(0, wxHour());
+    for (var i = 0; i < count && h + i < W.t.length; i++) {
       var x = (h + i) % 24;
-      out.push({ h: x, t: W.t[x], c: W.c[x], p: W.p[x], label: i === 0 ? 'Now' : ((x % 12 || 12) + (x >= 12 ? 'p' : 'a')) });
+      out.push({ h: x, t: W.t[h + i], c: W.c[h + i], p: W.p[h + i], label: i === 0 ? 'Now' : ((x % 12 || 12) + (x >= 12 ? 'p' : 'a')) });
     }
     return out;
   };
@@ -305,6 +311,7 @@
     }
   }
   App.resetIdle = function () { idleSec = 0; };
+  App.idleFor = function () { return idleSec; };
 
   // ------------------------------------------------------------ stage scaling (desktop preview only)
   function fit() {
@@ -327,7 +334,6 @@
 
   // ------------------------------------------------------------ boot
   App.start = function () {
-    App.setTime(15, 18); // demo default: a busy weekday afternoon
     fit();
     window.addEventListener('resize', fit);
     // Switch tabs the instant a finger lands (pointerdown), not on release. Keyboard "clicks"
@@ -347,7 +353,7 @@
     setInterval(tick, 1000);
     App.emit('ready');
     refreshStale(1500);
-    setTimeout(function () { App.toast('Tip: press and hold the <b>clock</b> in the sidebar for demo controls', { ms: 6000, icon: 'bolt' }); }, 1200);
   };
-  document.addEventListener('DOMContentLoaded', function () { App.start(); });
+  // js/sync.js sets DATA_READY: immediately when this device has a saved copy, else after first load.
+  document.addEventListener('DOMContentLoaded', function () { (window.DATA_READY || Promise.resolve()).then(App.start); });
 })();

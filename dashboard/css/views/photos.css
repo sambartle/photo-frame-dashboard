@@ -52,3 +52,6 @@
 .ph-btn--fav { padding: 0 24px 0 20px; }
 .ph-btn--fav.is-on { background: #E4007C; }
 .ph-btn--fav.is-on .i { fill: currentColor; }
+.ph-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; color: #fff; font-size: 44px; line-height: 1.2; background: #111; }
+.ph-empty i { font-size: 26px; opacity: .7; }
+.ph-empty[hidden] { display: none; }

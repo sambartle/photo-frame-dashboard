@@ -1,0 +1,88 @@
+{
+  "_readme": "Copy to family.json (gitignored) and edit. The Worker bundles it at deploy time; only names, colours and lists reach the browser, never the calendar links. Delete any section you don't use.",
+
+  "timezone": "Europe/London",
+  "location": { "lat": 51.5072, "lon": -0.1276, "units": "celsius" },
+
+  "people": [
+    { "id": "sam", "name": "Sam", "color": "#2D5BFF", "ha": "person.sam" },
+    { "id": "alex", "name": "Alex", "color": "#E4007C", "ha": "person.alex" },
+    { "id": "maya", "name": "Maya", "color": "#00A36C", "kid": true },
+    { "id": "otto", "name": "Otto", "color": "#FFB000", "kid": true }
+  ],
+
+  "calendars": [
+    { "_note": "Google Calendar → Settings → your calendar → 'Secret address in iCal format'", "url": "https://calendar.google.com/calendar/ical/.../basic.ics", "people": ["sam"] },
+    { "url": "https://calendar.google.com/calendar/ical/.../basic.ics", "people": ["alex"] },
+    { "url": "https://calendar.google.com/calendar/ical/.../basic.ics", "people": "all" }
+  ],
+
+  "routines": [
+    { "id": "morning", "name": "Morning", "range": "6 – 11 AM", "from": 0, "to": 11 },
+    { "id": "after", "name": "After school", "range": "11 AM – 5 PM", "from": 11, "to": 17 },
+    { "id": "evening", "name": "Evening", "range": "5 – 10 PM", "from": 17, "to": 24 }
+  ],
+  "chores": [
+    { "r": "morning", "who": "maya", "title": "Make bed", "emoji": "🛏️", "stars": 1 },
+    { "r": "morning", "who": "otto", "title": "Brush teeth", "emoji": "🪥", "stars": 1 },
+    { "r": "after", "who": "maya", "title": "Homework", "emoji": "📚", "stars": 2, "days": ["mon", "tue", "wed", "thu"] },
+    { "r": "after", "who": "any", "title": "Empty dishwasher", "emoji": "🍽️", "stars": 2 },
+    { "r": "evening", "who": "sam", "title": "Lock up", "emoji": "🔐" },
+    { "r": "evening", "who": "any", "title": "Bins to curb", "emoji": "🗑️", "stars": 2, "days": ["tue"] }
+  ],
+
+  "shopping": {
+    "stores": [{ "id": "grocer", "name": "Tesco" }, { "id": "bulk", "name": "Costco" }],
+    "categories": ["Produce", "Bakery", "Meat & Fish", "Dairy & Eggs", "Pantry", "Frozen", "Snacks", "Household"],
+    "storeOrder": { "bulk": ["Household", "Pantry", "Snacks", "Dairy & Eggs", "Meat & Fish", "Frozen", "Produce", "Bakery"] },
+    "usuals": ["Milk", "Eggs", "Bananas", "Bread", "Apples", "Coffee beans", "Greek yogurt", "Cheddar", "Butter", "Spinach", "Chicken thighs", "Kitchen roll"],
+    "catalog": {
+      "Produce": ["Apples", "Avocados", "Bananas", "Spinach", "Blueberries", "Broccoli", "Carrots", "Cucumber", "Garlic", "Grapes", "Lemons", "Onions", "Potatoes", "Strawberries", "Tomatoes"],
+      "Bakery": ["Bread", "Bagels", "Croissants", "Sourdough loaf", "Wraps"],
+      "Meat & Fish": ["Bacon", "Chicken breasts", "Chicken thighs", "Mince", "Salmon fillets", "Prawns"],
+      "Dairy & Eggs": ["Butter", "Cheddar", "Cream cheese", "Eggs", "Greek yogurt", "Milk", "Oat milk", "Parmesan"],
+      "Pantry": ["Baked beans", "Cereal", "Coffee beans", "Flour", "Honey", "Olive oil", "Pasta", "Pasta sauce", "Peanut butter", "Rice", "Sugar", "Tea bags"],
+      "Frozen": ["Frozen peas", "Frozen berries", "Ice cream", "Pizza", "Fish fingers"],
+      "Snacks": ["Crisps", "Crackers", "Dark chocolate", "Biscuits", "Popcorn"],
+      "Household": ["Washing-up liquid", "Dishwasher tablets", "Bin bags", "Laundry detergent", "Kitchen roll", "Toilet roll", "Toothpaste"]
+    }
+  },
+
+  "home": {
+    "_note": "Home Assistant, reached from Cloudflare: use your Nabu Casa or Cloudflare Tunnel URL. The long-lived token is a Worker secret (HA_TOKEN), not here.",
+    "url": "https://your-home.ui.nabu.casa",
+    "rooms": [
+      {
+        "name": "Kitchen",
+        "devices": [
+          { "entity": "light.kitchen_pendants", "name": "Pendants" },
+          { "entity": "cover.kitchen_blind", "name": "Blind" }
+        ]
+      },
+      {
+        "name": "Entry",
+        "devices": [
+          { "entity": "lock.front_door", "name": "Front Door" },
+          { "entity": "cover.garage_door", "name": "Garage", "garage": true }
+        ]
+      }
+    ],
+    "climate": "climate.main_floor",
+    "media": "media_player.kitchen",
+    "cameras": [
+      { "entity": "camera.front_porch", "name": "Front Porch" },
+      { "entity": "camera.driveway", "name": "Driveway" }
+    ],
+    "scenes": [
+      { "entity": "scene.morning", "name": "Morning", "icon": "sunrise" },
+      { "entity": "scene.dinner", "name": "Dinner", "icon": "utensils" },
+      { "entity": "scene.movie", "name": "Movie", "icon": "film" },
+      { "entity": "scene.goodnight", "name": "Goodnight", "icon": "moon" }
+    ],
+    "alerts": {
+      "doorbell": { "entity": "binary_sensor.doorbell", "camera": "camera.front_porch", "lock": "lock.front_door" },
+      "leak": { "entities": ["binary_sensor.laundry_leak"], "valve": "valve.water_main" },
+      "garageOpenMinutes": 15
+    }
+  }
+}

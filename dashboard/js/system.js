@@ -1,10 +1,9 @@
-// Alerts (takeovers, banners, notices) + the hidden demo drawer.
+// Alerts (takeovers, banners) raised by Home Assistant via js/sync.js, + the display-controls drawer.
 (function () {
   'use strict';
   var D = window.DATA, $ = App.$;
 
-  function img(seed, w, h) { return 'https://picsum.photos/seed/' + seed + '/' + w + '/' + h; }
-  App.img = img;
+  App.cameraSrc = function (id) { return '/api/ha/camera?id=' + encodeURIComponent(id) + '&t=' + Date.now(); };
 
   // ------------------------------------------------------------ full-screen takeovers
   function takeover(html, cls) {
@@ -25,30 +24,25 @@
 
   var doorbellTimer;
   App.doorbell = function () {
-    var now = App.now();
+    var now = App.now(), cfg = D.alertConfig || {};
     var el = takeover(
-      '<div class="tk-cam"><img src="' + img('visitor-porch', 1280, 800) + '" alt=""><span class="tk-live"><i></i>LIVE · Front Porch</span></div>' +
+      (cfg.doorbellCamera ? '<div class="tk-cam"><img src="' + App.cameraSrc(cfg.doorbellCamera) + '" alt=""><span class="tk-live"><i></i>Front door</span></div>' : '') +
       '<div class="tk-door">' +
       '  <div class="label label--light">' + App.icon('bell', 20) + ' Doorbell · ' + App.fmt.time(now) + '</div>' +
       '  <h1 class="serif tk-title">Someone’s at<br>the front door</h1>' +
       '  <div class="tk-actions">' +
-      '    <button class="tk-btn" data-talk>' + App.icon('mic', 30) + '<span>Talk</span></button>' +
-      '    <button class="tk-btn tk-btn--hold" data-unlock>' + App.icon('unlock', 30) + '<span>Hold to unlock</span></button>' +
+      (cfg.doorbellLock ? '    <button class="tk-btn tk-btn--hold" data-unlock>' + App.icon('unlock', 30) + '<span>Hold to unlock</span></button>' : '') +
       '    <button class="tk-btn tk-btn--solid" data-dismiss>' + App.icon('x', 30) + '<span>Dismiss</span></button>' +
       '  </div>' +
       '</div>', 'takeover--door');
     el.querySelector('[data-dismiss]').onclick = function () { clearTimeout(doorbellTimer); closeTakeover(); };
-    el.querySelector('[data-talk]').onclick = function () {
-      this.classList.toggle('is-on');
-      this.querySelector('span').textContent = this.classList.contains('is-on') ? 'Talking…' : 'Talk';
-    };
     var u = el.querySelector('[data-unlock]');
-    App.hold(u, 1000, {
+    if (u) App.hold(u, 1000, {
       done: function () {
-        App.setDevice('e-door', { locked: false });
+        App.setDevice(cfg.doorbellLock, { locked: false });
         u.classList.add('is-on');
         u.querySelector('span').textContent = 'Unlocked';
-        App.toast('Front door unlocked · relocks in 2 min', { icon: 'unlock' });
+        App.toast('Front door unlocked', { icon: 'unlock' });
       },
       cancel: function () { App.toast('Keep holding to unlock', { ms: 2000, icon: 'lock' }); }
     });
@@ -63,20 +57,22 @@
       '  <div class="tk-alarm-icon">' + App.icon('drop', 88) + '</div>' +
       '  <div class="label label--light">Critical alert · ' + App.fmt.time(now) + '</div>' +
       '  <h1 class="tk-huge">Water leak</h1>' +
-      '  <p class="tk-sub">Laundry room sensor detected water on the floor.</p>' +
+      '  <p class="tk-sub">A leak sensor detected water.</p>' +
       '  <div class="tk-actions">' +
-      '    <button class="tk-btn tk-btn--hold tk-btn--light" data-valve>' + App.icon('drop', 30) + '<span>Hold to shut off water</span></button>' +
+      ((D.alertConfig || {}).waterValve ? '    <button class="tk-btn tk-btn--hold tk-btn--light" data-valve>' + App.icon('drop', 30) + '<span>Hold to shut off water</span></button>' : '') +
       '    <button class="tk-btn tk-btn--solid tk-btn--light" data-ack>' + App.icon('check', 30) + '<span>Acknowledge</span></button>' +
       '  </div>' +
       '</div>', 'takeover--alarm');
     var v = el.querySelector('[data-valve]');
-    App.hold(v, 1200, {
-      done: function () { v.classList.add('is-on'); v.querySelector('span').textContent = 'Water main closed'; },
+    if (v) App.hold(v, 1200, {
+      done: function () {
+        App.write('home', 'POST', '/home/water-off', {}).then(function () { v.classList.add('is-on'); v.querySelector('span').textContent = 'Water main closed'; });
+      },
       cancel: function () { App.toast('Keep holding to shut off the water main', { ms: 2000, icon: 'drop' }); }
     });
     el.querySelector('[data-ack]').onclick = function () {
       closeTakeover();
-      App.toast('Leak acknowledged by the kitchen display', { icon: 'check' });
+      App.toast('Leak acknowledged', { icon: 'check' });
     };
   };
 
@@ -97,40 +93,33 @@
     return kill;
   };
 
-  App.garageOpenAlert = function () {
-    App.setDevice('g-door', { state: 'open' });
+  App.garageOpenAlert = function (mins) {
     App.banner({
-      icon: 'garage', title: 'Garage open for 15 min', sub: 'No one is in the garage · Wes is 12 min away',
+      icon: 'garage', title: 'Garage open for ' + App.fmt.mins(mins || 15), sub: 'Close it from here if nobody needs it open',
       action: 'Close garage', dismiss: 'Leave open',
       onAction: function () { App.openGarageSheet(); }
     });
   };
 
-  App.packageNotice = function () {
-    App.banner({
-      tone: 'ink', icon: 'box', title: 'Package delivered', sub: 'Front porch · ' + App.fmt.time(App.now()),
-      action: 'View camera', dismiss: 'OK', ms: 9000,
-      onAction: function () { App.cameraSheet(D.cameras[0]); }
-    });
-  };
-
-  // ------------------------------------------------------------ demo drawer
+  // ------------------------------------------------------------ display controls drawer
   function demoHTML() {
     var t = App.now();
     return '<div class="demo-panel">' +
-      '<div class="demo-head"><div><div class="label label--light">Prototype</div><h2 class="serif">Demo controls</h2></div><button class="demo-x" data-demo-close>' + App.icon('x', 28) + '</button></div>' +
-      '<div class="demo-sec"><div class="label label--light">Time of day · now ' + App.fmt.time(t) + '</div><div class="demo-grid">' +
+      '<div class="demo-head"><div><div class="label label--light">Home HQ</div><h2 class="serif">Display controls</h2></div><button class="demo-x" data-demo-close>' + App.icon('x', 28) + '</button></div>' +
+      '<div class="demo-sec"><div class="label label--light">Preview time of day · showing ' + App.fmt.time(t) + '</div><div class="demo-grid">' +
       '<button data-time="7:10">7:10 AM</button><button data-time="15:18">3:18 PM</button><button data-time="19:45">7:45 PM</button><button data-time="23:40">11:40 PM</button><button data-time="real">Real time</button></div></div>' +
       '<div class="demo-sec"><div class="label label--light">Modes</div><div class="demo-grid">' +
-      '<button data-mode="ambient">Ambient</button><button data-mode="night">Night</button><button data-fastidle>' + (App.idle.home < 60 ? 'Idle: fast ✓' : 'Idle: fast') + '</button></div></div>' +
-      '<div class="demo-sec"><div class="label label--light">Alerts</div><div class="demo-grid">' +
-      '<button data-alert="doorbell">Doorbell</button><button data-alert="leak">Water leak</button><button data-alert="garage">Garage open</button><button data-alert="package">Package</button></div></div>' +
-      '<div class="demo-sec"><div class="label label--light">Calendar data</div><div class="demo-grid">' +
-      ['normal', 'empty', 'busy'].map(function (m) {
-        return '<button data-cal="' + m + '" class="' + (App.calMode === m ? 'is-on' : '') + '">' + { normal: 'Normal day', empty: 'Empty day', busy: 'Overloaded' }[m] + '</button>';
-      }).join('') + '</div></div>' +
-      '<p class="demo-note">Keyboard: <b>D</b> demo · <b>A</b> ambient · <b>N</b> night · <b>1–7</b> views</p>' +
+      '<button data-mode="ambient">Ambient</button><button data-mode="night">Night</button><button data-fastidle>' + (App.idle.home < 60 ? 'Idle: fast ✓' : 'Idle: fast') + '</button><button data-reload>Refresh data</button></div></div>' +
+      (D.hasHome ? '<div class="demo-sec"><div class="label label--light">Test alerts (nothing is sent to the house)</div><div class="demo-grid">' +
+      '<button data-alert="doorbell">Doorbell</button><button data-alert="leak">Water leak</button><button data-alert="garage">Garage open</button></div></div>' : '') +
+      '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p></div>' +
+      '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–6</b> views</p>' +
       '</div>';
+  }
+  function status() {
+    var bits = [D.events.length + ' calendar events', D.photos.length + ' photos', D.weather ? 'weather ok' : 'no weather'];
+    if (D.hasHome) bits.push(D.homeOnline ? 'Home Assistant connected' : 'Home Assistant offline' + (D.homeError ? ' (' + App.esc(D.homeError) + ')' : ''));
+    return bits.join(' · ');
   }
   App.openDemo = function () {
     var el = $('#demo');
@@ -159,10 +148,14 @@
     }
     if (b.dataset.alert) {
       closeDemo();
-      ({ doorbell: App.doorbell, leak: App.leak, garage: App.garageOpenAlert, package: App.packageNotice })[b.dataset.alert]();
+      // Previews only: the leak valve and door lock still need a deliberate hold to act.
+      ({ doorbell: App.doorbell, leak: App.leak, garage: function () { App.garageOpenAlert(15); } })[b.dataset.alert]();
       return;
     }
-    if (b.dataset.cal) { App.calMode = b.dataset.cal; App.rerender(); App.openDemo(); }
+    if (b.hasAttribute('data-reload')) {
+      closeDemo();
+      Promise.all(['state', 'calendar', 'weather', 'home'].map(App.refresh)).then(function () { App.toast('Data refreshed', { icon: 'check', ms: 2000 }); });
+    }
   }
 
   App.on('ready', function () {
@@ -175,8 +168,8 @@
       if (k === 'a') App.setMode('ambient');
       if (k === 'n') App.setMode('night');
       if (k === 'escape') { closeDemo(); App.closeSheet(); }
-      var views = ['home', 'calendar', 'tasks', 'shopping', 'photos', 'control', 'agents'];
-      if (k >= '1' && k <= '7') App.go(views[+k - 1]);
+      var views = ['home', 'calendar', 'tasks', 'shopping', 'photos', 'control'];
+      if (k >= '1' && k <= '6') App.go(views[+k - 1]);
     });
   });
 })();

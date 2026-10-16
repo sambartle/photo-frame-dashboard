@@ -1,36 +1,48 @@
-// Home control: status summary, scenes, rooms of tiles, climate, cameras, media.
+// Home control: status summary, scenes, rooms of tiles, climate, cameras, media — via Home Assistant
+// (the Worker maps each change to an HA service call; see worker/index.js controlDevice).
 (function () {
   'use strict';
   var D = window.DATA;
-  var V = { el: null, pending: {}, scene: null, camTimer: null, camAge: 4 };
+  var V = { el: null, pending: {}, scene: null, camTimer: null, camAge: 0 };
 
   function dev(id) { return D.devices.filter(function (d) { return d.id === id; })[0]; }
+  function garageDev() { return D.devices.filter(function (d) { return d.type === 'garage'; })[0]; }
+  // Re-read Home Assistant shortly after a change, once the device has reported its new state.
+  function settle() { clearTimeout(V.settleT); V.settleT = setTimeout(function () { App.refresh('home'); }, 1500); }
 
-  // Optimistic device update: flip immediately, confirm (or revert) shortly after.
-  App.setDevice = function (id, patch, opts) {
+  // Optimistic device update: flip immediately, send to Home Assistant, revert if that fails.
+  App.setDevice = function (id, patch) {
     var d = dev(id), before = {};
+    var send = App.write('home', 'POST', '/home/device/' + encodeURIComponent(id), patch);
+    if (!d) return send.then(settle, function () {}); // e.g. the doorbell's lock when it has no tile
     Object.keys(patch).forEach(function (k) { before[k] = d[k]; d[k] = patch[k]; });
     V.pending[id] = true;
     changed([id]);
-    setTimeout(function () {
+    return send.then(function () {
       delete V.pending[id];
-      if (d.flaky && !(opts && opts.silent)) {
-        Object.keys(before).forEach(function (k) { d[k] = before[k]; });
-        App.toast('Couldn’t reach <b>' + d.name + '</b> · it may be offline', { tone: 'error', icon: 'bolt' });
-        changed([id]);
-      } else paintTile(id);
-    }, d.flaky ? 2600 : 600);
+      paintTile(id);
+      settle();
+    }, function () {
+      delete V.pending[id];
+      Object.keys(before).forEach(function (k) { d[k] = before[k]; });
+      App.toast('Couldn’t reach <b>' + App.esc(d.name) + '</b> · it may be offline', { tone: 'error', icon: 'bolt' });
+      changed([id]);
+    });
   };
 
   // ------------------------------------------------------------ tiles
   function tile(d) {
+    var html = tileHTML(d);
+    return d.offline ? html.replace('class="tile ', 'class="tile is-offline ') : html;
+  }
+  function tileHTML(d) {
     var pend = V.pending[d.id] ? '<i class="pend"></i>' : '';
     if (d.type === 'light') {
       return '<div class="tile tile--light' + (d.on ? ' is-on' : '') + '" data-dev="' + d.id + '" style="--lvl:' + (d.on ? d.level : 0) + '%">' +
         '<span class="tile-fill"></span>' + pend +
         '<span class="tile-icon">' + App.icon('bulb', 28) + '</span>' +
         '<span class="tile-name">' + d.name + '</span>' +
-        '<span class="tile-state num">' + (d.on ? d.level + '%' : 'Off') + '</span></div>';
+        '<span class="tile-state num">' + (d.offline ? 'Offline' : d.on ? (d.dims ? d.level + '%' : 'On') : 'Off') + '</span></div>';
     }
     if (d.type === 'blind') {
       return '<div class="tile tile--blind' + (d.pos > 0 ? ' is-on' : '') + '" data-dev="' + d.id + '" style="--lvl:' + d.pos + '%">' +
@@ -51,27 +63,30 @@
       return '<div class="tile tile--garage' + (d.state !== 'closed' ? ' is-warn' : '') + (/ing$/.test(d.state) ? ' is-moving' : '') + '" data-dev="' + d.id + '">' + pend +
         '<span class="tile-icon">' + App.icon('garage', 28) + '</span>' +
         '<span class="tile-name">' + d.name + '</span>' +
-        '<span class="tile-state">' + label + '</span></div>';
+        '<span class="tile-state">' + (d.offline ? 'Offline' : label) + '</span></div>';
     }
     return '';
   }
 
   function summary() {
+    if (!D.homeOnline) return '<div class="hc-offline">' + App.icon('bolt', 26) + '<span><b>Can’t reach Home Assistant</b>' + App.esc(D.homeError || '') + '</span></div>';
     var lights = D.devices.filter(function (d) { return d.type === 'light' && d.on; });
-    var unlocked = D.devices.filter(function (d) { return d.type === 'lock' && !d.locked; });
-    var garage = dev('g-door');
-    var secure = !unlocked.length && garage.state === 'closed';
-    var c = D.climate, m = D.media;
-    return '<button class="sum' + (lights.length ? ' sum--warm' : '') + '" data-sum="lights"><span class="label">Lights</span><b class="num">' + lights.length + '</b><small>on in ' + unique(lights.map(function (l) { return l.room; })).length + ' rooms</small></button>' +
-      '<button class="sum' + (secure ? '' : ' sum--warn') + '" data-sum="security"><span class="label">Security</span><b class="num">' + (secure ? 'Locked' : unlocked.length + (garage.state !== 'closed' ? 1 : 0)) + '</b><small>' + (secure ? 'All doors + garage' : (garage.state !== 'closed' ? 'Garage ' + garage.state : '') + (unlocked.length ? (garage.state !== 'closed' ? ' · ' : '') + unlocked.map(function (u) { return u.name; }).join(', ') : '') + (secure ? '' : ' open')) + '</small></button>' +
-      '<button class="sum" data-sum="climate"><span class="label">Climate</span><b class="num">' + c.current + '°</b><small>' + (c.mode === 'off' ? 'System off' : (c.set > c.current ? 'Heating' : c.set < c.current ? 'Cooling' : 'Holding') + ' to ' + c.set + '°') + '</small></button>' +
-      '<button class="sum" data-sum="media"><span class="label">Media</span><b class="num">' + (m.playing ? 'Playing' : 'Paused') + '</b><small>' + m.room + ' speaker</small></button>';
+    var locks = D.devices.filter(function (d) { return d.type === 'lock'; });
+    var unlocked = locks.filter(function (d) { return !d.locked; });
+    var garage = garageDev(), gOpen = garage && garage.state !== 'closed';
+    var secure = !unlocked.length && !gOpen;
+    var c = D.climate, m = D.media, out = [];
+    out.push('<button class="sum' + (lights.length ? ' sum--warm' : '') + '" data-sum="lights"><span class="label">Lights</span><b class="num">' + lights.length + '</b><small>on in ' + unique(lights.map(function (l) { return l.room; })).length + ' rooms</small></button>');
+    if (locks.length || garage) out.push('<button class="sum' + (secure ? '' : ' sum--warn') + '" data-sum="security"><span class="label">Security</span><b class="num">' + (secure ? 'Locked' : unlocked.length + (gOpen ? 1 : 0)) + '</b><small>' + (secure ? (garage ? 'All doors + garage' : 'All doors') : (gOpen ? 'Garage ' + garage.state : '') + (unlocked.length ? (gOpen ? ' · ' : '') + unlocked.map(function (u) { return u.name; }).join(', ') : '') + ' open') + '</small></button>');
+    if (c) out.push('<button class="sum" data-sum="climate"><span class="label">Climate</span><b class="num">' + (c.current != null ? c.current + '°' : '–') + '</b><small>' + (c.mode === 'off' || c.set == null ? 'System off' : (c.set > c.current ? 'Heating' : c.set < c.current ? 'Cooling' : 'Holding') + ' to ' + c.set + '°') + '</small></button>');
+    if (m) out.push('<button class="sum" data-sum="media"><span class="label">Media</span><b class="num">' + (m.playing ? 'Playing' : 'Paused') + '</b><small>' + App.esc(m.room) + '</small></button>');
+    return out.join('');
   }
   function unique(a) { return a.filter(function (x, i) { return a.indexOf(x) === i; }); }
 
   function scenes() {
     return D.scenes.map(function (s) {
-      return '<button class="scene' + (V.scene === s.id ? ' is-on' : '') + '" data-scene="' + s.id + '">' + App.icon(s.icon, 26) + '<span>' + s.name + '</span></button>';
+      return '<button class="scene' + (V.scene === s.id ? ' is-on' : '') + '" data-scene="' + s.id + '">' + App.icon(s.icon, 26) + '<span>' + App.esc(s.name) + '</span></button>';
     }).join('');
   }
 
@@ -90,27 +105,35 @@
 
   function climate() {
     var c = D.climate;
-    var verb = c.mode === 'off' ? 'Off' : c.set > c.current ? 'Heating' : c.set < c.current ? 'Cooling' : 'Holding';
-    return '<div class="label label--light">Climate · Main floor</div>' +
-      '<div class="th-main"><button class="th-btn" data-temp="-0.5" aria-label="Cooler">' + App.icon('minus', 36) + '</button>' +
-      '<div class="th-set"><span class="num">' + c.set.toFixed(1).replace('.0', '') + '°</span><small>Set to</small></div>' +
-      '<button class="th-btn" data-temp="0.5" aria-label="Warmer">' + App.icon('plus', 36) + '</button></div>' +
-      '<div class="th-now"><span><b class="num">' + c.current + '°</b> inside</span><span class="th-verb th-verb--' + verb.toLowerCase() + '">' + verb + '</span><span><b class="num">' + c.humidity + '%</b> humidity</span></div>' +
-      '<div class="seg seg--dark">' + [['heat', 'Heat'], ['cool', 'Cool'], ['auto', 'Auto'], ['off', 'Off']].map(function (m) {
+    if (!c) return '';
+    var verb = c.mode === 'off' || c.set == null ? 'Off' : c.set > c.current ? 'Heating' : c.set < c.current ? 'Cooling' : 'Holding';
+    var modes = [['heat', 'Heat'], ['cool', 'Cool'], ['auto', 'Auto'], ['off', 'Off']].filter(function (m) {
+      return !c.modes.length || c.modes.indexOf(m[0] === 'auto' ? 'heat_cool' : m[0]) > -1 || (m[0] === 'auto' && c.modes.indexOf('auto') > -1);
+    });
+    return '<div class="label label--light">Climate</div>' +
+      '<div class="th-main"><button class="th-btn" data-temp="-1" aria-label="Cooler">' + App.icon('minus', 36) + '</button>' +
+      '<div class="th-set"><span class="num">' + (c.set != null ? (+c.set).toFixed(1).replace('.0', '') + '°' : '–') + '</span><small>Set to</small></div>' +
+      '<button class="th-btn" data-temp="1" aria-label="Warmer">' + App.icon('plus', 36) + '</button></div>' +
+      '<div class="th-now"><span><b class="num">' + (c.current != null ? c.current + '°' : '–') + '</b> inside</span><span class="th-verb th-verb--' + verb.toLowerCase() + '">' + verb + '</span>' +
+      (c.humidity != null ? '<span><b class="num">' + c.humidity + '%</b> humidity</span>' : '<span></span>') + '</div>' +
+      '<div class="seg seg--dark">' + modes.map(function (m) {
         return '<button class="' + (c.mode === m[0] ? 'is-on' : '') + '" data-tmode="' + m[0] + '">' + m[1] + '</button>';
       }).join('') + '</div>';
   }
 
   function cams() {
+    if (!D.cameras.length) return '';
+    V.camAge = 0;
     return '<div class="label">Cameras · snapshots every 20s</div><div class="cams">' + D.cameras.slice(0, 2).map(function (c) {
-      return '<button class="cam" data-cam="' + c.id + '"><img src="' + App.img(c.seed, 400, 250) + '" alt=""><span class="cam-name">' + c.name + '</span><span class="cam-age">' + V.camAge + 's ago</span></button>';
+      return '<button class="cam" data-cam="' + c.id + '"><img src="' + App.cameraSrc(c.id) + '" alt=""><span class="cam-name">' + App.esc(c.name) + '</span><span class="cam-age">now</span></button>';
     }).join('') + '</div>';
   }
 
   function media() {
     var m = D.media;
-    return '<img class="np-art" src="' + App.img(m.seed, 160, 160) + '" alt="">' +
-      '<div class="np-text"><span class="label">' + m.room + '</span><b>' + m.title + '</b><span>' + m.artist + '</span></div>' +
+    if (!m) return '';
+    return (m.art ? '<img class="np-art" src="' + m.art + '" alt="">' : '<span class="np-art np-art--none">' + App.icon('music', 40) + '</span>') +
+      '<div class="np-text"><span class="label">' + App.esc(m.room) + '</span><b>' + App.esc(m.title) + '</b><span>' + App.esc(m.artist) + '</span></div>' +
       '<button class="np-btn" data-play aria-label="Play/Pause">' + App.icon(m.playing ? 'pause' : 'play', 30) + '</button>';
   }
 
@@ -146,8 +169,11 @@
     rs.innerHTML = rooms();
     rs.scrollTop = st;
     bindTiles(rs);
-    el.querySelector('.hc-climate').innerHTML = climate();
-    el.querySelector('.hc-media').innerHTML = media();
+    el.querySelector('.hc-sum').style.gridTemplateColumns = 'repeat(' + Math.max(1, el.querySelector('.hc-sum').children.length) + ',1fr)';
+    el.querySelector('.hc-scenes').hidden = !D.scenes.length;
+    var cl = el.querySelector('.hc-climate'), md = el.querySelector('.hc-media');
+    cl.innerHTML = climate(); cl.hidden = !D.climate;
+    md.innerHTML = media(); md.hidden = !D.media;
   }
 
   // ------------------------------------------------------------ tile gestures
@@ -189,6 +215,7 @@
   function bindTile(t) {
     (function () {
       var d = dev(t.dataset.dev);
+      if (!d || d.offline) return;
       if (d.type === 'light' || d.type === 'blind') sliderTile(t, d);
       if (d.type === 'lock') {
         App.hold(t, 1000, {
@@ -204,7 +231,9 @@
 
   // Slide-to-confirm for the garage
   App.openGarageSheet = function () {
-    var g = dev('g-door'), opening = g.state === 'closed';
+    var g = garageDev();
+    if (!g) return;
+    var opening = g.state === 'closed';
     App.sheet('<div class="sheet-pad"><div class="label">Garage door · currently ' + g.state + '</div><h2 class="serif sheet-h">' + (opening ? 'Open' : 'Close') + ' the garage?</h2>' +
       '<p class="sheet-p">' + (opening ? 'Make sure the driveway is clear.' : 'The door will stop and reverse if anything is in the way.') + '</p>' +
       '<div class="slide-confirm"><span class="sc-label">Slide to ' + (opening ? 'open' : 'close') + ' →</span><span class="sc-fill"></span><span class="sc-knob">' + App.icon('garage', 30) + '</span></div></div>', {
@@ -229,10 +258,9 @@
 
           if (knob._x >= knob._max - 6) {
             close();
-            g.state = opening ? 'opening' : 'closing';
             V.scene = null;
-            changed(['g-door']);
-            setTimeout(function () { g.state = opening ? 'open' : 'closed'; changed(['g-door']); App.toast('Garage ' + g.state, { icon: 'garage', ms: 2500 }); }, 4000);
+            App.setDevice(g.id, { state: opening ? 'opening' : 'closing' });
+            App.toast('Garage ' + (opening ? 'opening' : 'closing') + '…', { icon: 'garage', ms: 2500 });
           } else { knob.style.transform = ''; fill.style.width = ''; }
         });
       }
@@ -240,7 +268,7 @@
   };
 
   App.cameraSheet = function (c) {
-    App.sheet('<div class="cam-big"><img src="' + App.img(c.seed, 1200, 750) + '" alt=""><div class="cam-big-bar"><span class="tk-live"><i></i>' + c.name + '</span><span class="label label--light">Snapshot · ' + V.camAge + 's ago</span></div></div>', { cls: 'sheet--cam' });
+    App.sheet('<div class="cam-big"><img src="' + App.cameraSrc(c.id) + '" alt=""><div class="cam-big-bar"><span class="tk-live"><i></i>' + App.esc(c.name) + '</span><span class="label label--light">Snapshot · just now</span></div></div>', { cls: 'sheet--cam' });
   };
 
   function listSheet(kind) {
@@ -258,16 +286,16 @@
         bindTiles(box);
         var off = s.querySelector('[data-alloff]'), lk = s.querySelector('[data-lockall]');
         if (off) off.onclick = function () {
-          var prev = D.devices.filter(function (d) { return d.type === 'light' && d.on; });
-          prev.forEach(function (d) { d.on = false; });
-          close(); changed(prev.map(function (d) { return d.id; }));
-          App.toast('Turned off ' + prev.length + ' lights', { icon: 'bulb', undo: function () { prev.forEach(function (d) { d.on = true; }); changed(prev.map(function (d) { return d.id; })); } });
+          var prev = D.devices.filter(function (d) { return d.type === 'light' && d.on && !d.offline; });
+          close();
+          prev.forEach(function (d) { App.setDevice(d.id, { on: false }); });
+          App.toast('Turned off ' + prev.length + ' lights', { icon: 'bulb', undo: function () { prev.forEach(function (d) { App.setDevice(d.id, { on: true, level: d.level }); }); } });
         };
         if (lk) lk.onclick = function () {
-          var locks = D.devices.filter(function (d) { return d.type === 'lock'; });
-          locks.forEach(function (d) { d.locked = true; });
-          close(); changed(locks.map(function (d) { return d.id; }));
-          App.toast('All doors locked', { icon: 'lock' });
+          var locks = D.devices.filter(function (d) { return d.type === 'lock' && !d.locked && !d.offline; });
+          close();
+          locks.forEach(function (d) { App.setDevice(d.id, { locked: true }); });
+          App.toast(locks.length ? 'Locking ' + locks.length + (locks.length === 1 ? ' door' : ' doors') : 'All doors already locked', { icon: 'lock' });
         };
       }
     });
@@ -275,31 +303,12 @@
 
   function applyScene(id) {
     var s = D.scenes.filter(function (x) { return x.id === id; })[0];
-    var snapshot = D.devices.map(function (d) { return Object.assign({}, d); });
-    var prevScene = V.scene;
-    Object.keys(s.set).forEach(function (k) {
-      var d = dev(k), v = s.set[k];
-      if (d.type === 'blind') d.pos = v;
-      else if (v === 0) d.on = false;
-      else { d.on = true; d.level = v; }
-    });
-    if (id === 'away' || id === 'night') D.devices.forEach(function (d) { if (d.type === 'lock') d.locked = true; });
     V.scene = id;
-    function diff() {
-      return snapshot.filter(function (o) { var d = dev(o.id); return o.on !== d.on || o.level !== d.level || o.pos !== d.pos || o.locked !== d.locked; })
-        .map(function (o) { return o.id; });
-    }
-    var ids = diff();
     paintPart('.hc-scenes', scenes());
-    changed(ids);
-    App.toast('<b>' + s.name + '</b> scene on', {
-      icon: s.icon, undo: function () {
-        snapshot.forEach(function (o) { Object.assign(dev(o.id), o); });
-        V.scene = prevScene;
-        paintPart('.hc-scenes', scenes());
-        changed(ids);
-      }
-    });
+    App.write('home', 'POST', '/home/scene', { id: id }).then(function () {
+      App.toast('<b>' + App.esc(s.name) + '</b> scene on', { icon: s.icon });
+      settle();
+    }, function () { V.scene = null; paintPart('.hc-scenes', scenes()); });
   }
 
   function onClick(e) {
@@ -313,21 +322,38 @@
       return;
     }
     if ((t = e.target.closest('[data-temp]'))) {
-      D.climate.set = Math.max(15, Math.min(28, D.climate.set + +t.dataset.temp));
-      if (D.climate.mode === 'off') D.climate.mode = 'heat';
+      var c = D.climate, step = c.step || 0.5;
+      var base = c.set != null ? +c.set : (c.current != null ? Math.round(c.current) : 20);
+      c.set = Math.round(Math.max(c.min, Math.min(c.max, base + step * +t.dataset.temp)) / step) * step;
+      // Taps come in bursts: send only the last target temperature.
+      clearTimeout(V.tempT);
+      V.tempT = setTimeout(function () { App.write('home', 'POST', '/home/climate', { set: c.set }).then(settle); }, 800);
       return climateChanged();
     }
-    if ((t = e.target.closest('[data-tmode]'))) { D.climate.mode = t.dataset.tmode; return climateChanged(); }
+    if ((t = e.target.closest('[data-tmode]'))) {
+      D.climate.mode = t.dataset.tmode;
+      App.write('home', 'POST', '/home/climate', { mode: t.dataset.tmode }).then(settle);
+      return climateChanged();
+    }
     if ((t = e.target.closest('[data-cam]'))) return App.cameraSheet(D.cameras.filter(function (c) { return c.id === t.dataset.cam; })[0]);
-    if ((t = e.target.closest('[data-play]'))) { D.media.playing = !D.media.playing; paintPart('.hc-media', media()); paintPart('.hc-sum', summary()); }
+    if ((t = e.target.closest('[data-play]'))) {
+      D.media.playing = !D.media.playing;
+      paintPart('.hc-media', media()); paintPart('.hc-sum', summary());
+      App.write('home', 'POST', '/home/media', {}).then(settle);
+    }
   }
   function climateChanged() { paintPart('.hc-climate', climate()); paintPart('.hc-sum', summary()); App.emit('data'); }
 
+  // Count up since the last snapshot and fetch fresh ones every 20 s while this view is open.
   function camTimer() {
     clearInterval(V.camTimer);
     V.camTimer = setInterval(function () {
-      V.camAge = V.camAge >= 20 ? 1 : V.camAge + 1;
-      App.$$('.cam-age', V.el).forEach(function (a) { a.textContent = V.camAge + 's ago'; });
+      V.camAge++;
+      if (V.camAge >= 20) {
+        V.camAge = 0;
+        App.$$('.cam', V.el).forEach(function (b) { b.querySelector('img').src = App.cameraSrc(b.dataset.cam); });
+      }
+      App.$$('.cam-age', V.el).forEach(function (a) { a.textContent = V.camAge ? V.camAge + 's ago' : 'now'; });
     }, 1000);
   }
 

@@ -11,6 +11,7 @@
 
   function weather() {
     var w = App.weatherNow();
+    if (!w) return '<div class="h-wx-say"><b>No forecast yet.</b> Set <i>location</i> in family.json.</div>';
     var hours = App.hourly(7);
     var tmin = Math.min.apply(null, hours.map(function (h) { return h.t; }));
     var tmax = Math.max.apply(null, hours.map(function (h) { return h.t; }));
@@ -27,8 +28,9 @@
       }).join('') + '</div>';
   }
 
+  // Only people with a Home Assistant person entity; everyone else's whereabouts are unknown.
   function presence() {
-    return D.people.map(function (p) {
+    return D.people.filter(function (p) { return p.tracked; }).map(function (p) {
       var sub = p.home ? 'Home' : (p.eta ? '<b>ETA ' + p.eta + ' min</b>' : p.status);
       return '<div class="h-who' + (p.home ? ' is-home' : '') + '" style="' + App.pstyle(p) + '">' +
         App.avatar(p, 36, p.home ? '' : 'avatar--away') +
@@ -71,6 +73,7 @@
 
   function lanes() {
     var now = App.now();
+    V.el.querySelector('.h-lanes').style.gridTemplateColumns = 'repeat(' + Math.max(1, D.people.length) + ',1fr)';
     return D.people.map(function (p) {
       var list = App.timedOn(now, p.id).filter(function (e) { return e.end > now; });
       var shown = list.slice(0, 3), more = list.length - shown.length;
@@ -119,15 +122,25 @@
   }
 
   function status() {
+    var W = D.weather;
+    if (!D.hasHome) {
+      // No Home Assistant: show the outside conditions instead.
+      return '<div class="label">Outside</div>' + (W ?
+        '<div class="h-st-row">' + App.icon('thermo', 24) + '<b class="num">' + W.feels + '°</b><span>feels like</span></div>' +
+        '<div class="h-st-row">' + App.icon('drop', 24) + '<b class="num">' + W.humidity + '%</b><span>humidity</span></div>' +
+        '<div class="h-st-row">' + App.icon('away', 24) + '<b class="num">' + W.wind + '</b><span>' + (W.units === 'fahrenheit' ? 'mph' : 'km/h') + ' wind</span></div>' : '');
+    }
+    if (!D.homeOnline) return '<div class="label">Home</div><div class="h-st-row is-warn">' + App.icon('bolt', 24) + '<span>Can’t reach Home Assistant</span></div>';
     var lights = D.devices.filter(function (d) { return d.type === 'light' && d.on; }).length;
     var unlocked = D.devices.filter(function (d) { return d.type === 'lock' && !d.locked; });
     var garage = D.devices.filter(function (d) { return d.type === 'garage'; })[0];
-    var secure = !unlocked.length && garage.state === 'closed';
-    var secText = secure ? 'All locked' : (garage.state !== 'closed' ? 'Garage open' : unlocked[0].name + ' unlocked');
+    var garageOpen = garage && garage.state !== 'closed';
+    var secure = !unlocked.length && !garageOpen;
+    var secText = secure ? 'All locked' : (garageOpen ? 'Garage open' : unlocked[0].name + ' unlocked');
     return '<div class="label">Home</div>' +
       '<div class="h-st-row">' + App.icon('bulb', 24) + '<b class="num">' + lights + '</b><span>lights on</span></div>' +
       '<div class="h-st-row' + (secure ? '' : ' is-warn') + '">' + App.icon(secure ? 'lock' : 'unlock', 24) + '<span>' + secText + '</span></div>' +
-      '<div class="h-st-row">' + App.icon('thermo', 24) + '<b class="num">' + D.climate.current + '°</b><span>inside</span></div>';
+      (D.climate && D.climate.current != null ? '<div class="h-st-row">' + App.icon('thermo', 24) + '<b class="num">' + D.climate.current + '°</b><span>inside</span></div>' : '');
   }
 
   function paint() {
@@ -139,7 +152,9 @@
     el.querySelector('.h-lanes').innerHTML = lanes();
     el.querySelector('.h-chores').innerHTML = chores();
     el.querySelector('.h-shop').innerHTML = shopping();
-    el.querySelector('.h-status').innerHTML = status();
+    var st = el.querySelector('.h-status');
+    st.innerHTML = status();
+    if (D.hasHome) st.setAttribute('data-go', 'control'); else st.removeAttribute('data-go');
   }
 
   function photoCaption(s) {
@@ -159,7 +174,7 @@
           '<div class="h-side">' +
           '  <button class="h-photo" data-go="photos"><div class="h-photo-stage"></div><div class="h-photo-cap"></div></button>' +
           '  <button class="h-chores card" data-go="tasks"></button>' +
-          '  <div class="h-duo"><button class="h-shop card" data-go="shopping"></button><button class="h-status card" data-go="control"></button></div>' +
+          '  <div class="h-duo"><button class="h-shop card" data-go="shopping"></button><button class="h-status card"></button></div>' +
           '</div></div>';
         el.addEventListener('click', function (e) {
           var ev = e.target.closest('[data-ev]');
@@ -181,6 +196,7 @@
     V.el.querySelector('.h-clock').innerHTML = clock();
     V.el.querySelector('.h-hero-slot').innerHTML = hero();
     if (n.getMinutes() === 0) { V.el.querySelector('.h-weather').innerHTML = weather(); V.el.querySelector('.h-lanes').innerHTML = lanes(); }
+    else if (n.getMinutes() % 5 === 0) V.el.querySelector('.h-lanes').innerHTML = lanes(); // drop finished events
   });
   App.on('data', function () { if (App.current === 'home') paint(); });
 })();
