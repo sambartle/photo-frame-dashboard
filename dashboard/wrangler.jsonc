@@ -5,6 +5,9 @@
   "name": "home-dashboard",
   "main": "worker/index.js",
   "compatibility_date": "2026-09-30",
+  // Serve only at <name>.<subdomain>.workers.dev; no per-version preview URLs.
+  "workers_dev": true,
+  "preview_urls": false,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -13,7 +16,7 @@
   },
   "d1_databases": [
     // `npx wrangler d1 create home-hq` prints the database_id to paste here.
-    { "binding": "DB", "database_name": "home-hq", "database_id": "REPLACE_WITH_YOUR_D1_ID", "migrations_dir": "migrations" }
+    { "binding": "DB", "database_name": "home-hq", "database_id": "8abca1c9-2432-48e7-9945-d6abe494b8cb", "migrations_dir": "migrations" }
   ],
   "r2_buckets": [
     { "binding": "PHOTOS", "bucket_name": "home-hq-photos" }
