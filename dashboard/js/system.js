@@ -138,6 +138,7 @@
   }
   function status() {
     var bits = [D.events.length + ' calendar events', D.photos.length + ' photos', D.weather ? 'weather ok' : 'no weather'];
+    (D.calendarErrors || []).forEach(function (e) { bits.push(App.esc(e)); });
     if (D.hasHome) bits.push(D.homeOnline ? 'Home Assistant connected' : 'Home Assistant offline' + (D.homeError ? ' (' + App.esc(D.homeError) + ')' : ''));
     return bits.join(' · ');
   }

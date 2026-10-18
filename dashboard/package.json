@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "db:migrate": "wrangler d1 migrations apply home-hq --remote",
     "db:migrate:local": "wrangler d1 migrations apply home-hq --local",
-    "deploy": "vite build && wrangler deploy"
+    "deploy": "vite build && wrangler deploy",
+    "calendars": "node tools/check-calendars.mjs && wrangler secret put CALENDARS < calendars.json"
   },
   "devDependencies": {
     "vite": "^8.3.1",

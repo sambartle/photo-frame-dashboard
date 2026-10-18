@@ -64,12 +64,13 @@ npx wrangler login
 
    ```bash
    npx wrangler secret put DASHBOARD_KEY
-   npx wrangler secret put CALENDARS < calendars.json
+   npm run calendars
    npx wrangler secret put HA_TOKEN      # only with Home Assistant: Profile → Security → Long-lived access tokens
    ```
 
-   Secrets are encrypted at Cloudflare and can't be read back, even from the dashboard. After
-   editing `calendars.json`, run the `CALENDARS` line again; no redeploy is needed.
+   Secrets are encrypted at Cloudflare and can't be read back, even from the dashboard.
+   `npm run calendars` checks `calendars.json` first (valid JSON, known people) and refuses to
+   upload a broken file. Run it again after every edit; no redeploy is needed.
 
 4. **Deploy.**
 
@@ -103,7 +104,7 @@ wrangler can't find `wrangler.jsonc` and stops with "Required Worker name missin
 | --- | --- | --- | --- |
 | The dashboard code | the files in `dashboard/` | `npm run deploy`, then reload the frame | at the next reload |
 | People, chores, routines, stores, shopping catalog, weather location | `family.json` | `npm run deploy`, then reload the frame | at the next reload |
-| Calendars | `calendars.json` | `npx wrangler secret put CALENDARS < calendars.json` | within ~15 min, no deploy |
+| Calendars | `calendars.json` | `npm run calendars` | within ~15 min, no deploy |
 | Home Assistant devices | `home` in `family.json` | `npm run deploy` | within ~10 s of the reload |
 | Home Assistant token | in Home Assistant | `npx wrangler secret put HA_TOKEN` | immediately |
 | The dashboard key | — | `npx wrangler secret put DASHBOARD_KEY`, then re-key every device | immediately |
@@ -155,7 +156,7 @@ Each entry in `calendars.json` is a Google Calendar secret iCal link and the peo
 `["sam"]`, `["laura", "sam"]` or `"all"`. After any change, upload the file again:
 
 ```bash
-npx wrangler secret put CALENDARS < calendars.json
+npm run calendars
 ```
 
 The Worker re-reads calendars at most every 10 minutes and the frame asks every 5, so allow up to

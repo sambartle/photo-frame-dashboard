@@ -71,6 +71,7 @@
       if (rail) rail.hidden = !D.hasHome;
     },
     calendar: function (c) {
+      D.calendarErrors = c.errors || [];
       D.events = c.events.map(function (e) {
         return Object.assign({}, e, {
           start: e.allDay ? localDate(e.start) : new Date(e.start),

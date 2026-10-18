@@ -203,30 +203,72 @@ function calendarList(env) {
   return RAW.calendars || [];
 }
 
-async function getCalendar(env) {
+const CAL_TTL_MS = 10 * 60e3;
+
+// Fetch each calendar on its own. One bad link must not hide the others: a calendar that fails keeps
+// the events it had last time and its error is reported (never its link) in the log, in the
+// response and on the frame's Status panel.
+async function refreshCalendars(env, prev) {
   const from = Date.now() - 45 * DAY_MS, to = Date.now() + 75 * DAY_MS;
   const all = CFG.people.map((p) => p.id);
-  const feeds = await cached(env, 'calendar', 10 * 60e3, async () => {
-    const results = await Promise.all(calendarList(env).map(async (cal, i) => {
-      const people = cal.people === 'all' ? all : [].concat(cal.people || []).filter((id) => all.indexOf(id) > -1);
-      const res = await fetch(cal.url.replace(/^webcal:/, 'https:'), { headers: { 'user-agent': 'HomeHQ/1.0' } });
-      if (!res.ok) throw new Error('calendar ' + (i + 1) + ': HTTP ' + res.status);
-      return parseIcs(await res.text(), people.length ? people : all, from, to, 'c' + i + '-');
-    }));
-    // The same invite on two people's calendars becomes one event with both of them.
-    const byKey = new Map();
-    results.flat().forEach((e) => {
-      const prev = byKey.get(e.key);
-      if (prev) e.people.forEach((p) => { if (prev.people.indexOf(p) < 0) prev.people.push(p); });
-      else { e.people = e.people.slice(); byKey.set(e.key, e); }
-    });
-    return Array.from(byKey.values()).map((e) => { delete e.key; return e; });
-  });
-  const local = await env.DB.prepare('SELECT id, title, people, start, end FROM events WHERE end > ?').bind(from).all();
+  let list;
+  try {
+    list = calendarList(env);
+    if (!Array.isArray(list)) throw new Error('CALENDARS must be a list [ … ]');
+  } catch (e) {
+    console.error('calendars: ' + e.message);
+    return { events: prev ? prev.events : [], errors: [e.message], checked: Date.now() };
+  }
+  const results = await Promise.all(list.map(async (cal, i) => {
+    const n = i + 1, notes = [];
+    try {
+      if (!cal || typeof cal.url !== 'string') throw new Error('no "url"');
+      const wanted = [].concat(cal.people || []).indexOf('all') > -1 ? all : [].concat(cal.people || []);
+      const unknown = wanted.filter((id) => all.indexOf(id) < 0);
+      if (unknown.length) notes.push('Calendar ' + n + ': unknown people ' + unknown.join(', ') + ' (ids must match family.json)');
+      const people = wanted.filter((id) => all.indexOf(id) > -1);
+      const res = await fetch(cal.url.trim().replace(/^webcal:/, 'https:'), { headers: { 'user-agent': 'HomeHQ/1.0' } });
+      if (!res.ok) throw new Error('HTTP ' + res.status + (res.status === 404 ? ' (link wrong, or reset in Google)' : ''));
+      const text = await res.text();
+      if (text.slice(0, 2000).indexOf('BEGIN:VCALENDAR') < 0) throw new Error('not an iCal feed (use "Secret address in iCal format")');
+      const events = parseIcs(text, people.length ? people : all, from, to, 'c' + i + '-');
+      console.log('calendar ' + n + ': ' + events.length + ' events');
+      return { events, notes };
+    } catch (e) {
+      console.error('calendar ' + n + ': ' + e.message);
+      const kept = prev ? prev.events.filter((ev) => ev.id.indexOf('c' + i + '-') === 0) : [];
+      return { events: kept, notes: notes.concat(['Calendar ' + n + ': ' + e.message]) };
+    }
+  }));
+  // The same invite on two people's calendars becomes one event with both of them.
+  const byKey = new Map();
+  results.forEach((r) => r.events.forEach((e) => {
+    const k = e.key || e.id, prev = byKey.get(k);
+    if (prev) e.people.forEach((p) => { if (prev.people.indexOf(p) < 0) prev.people.push(p); });
+    else byKey.set(k, Object.assign({}, e, { people: e.people.slice() }));
+  }));
   return {
-    events: feeds.concat(local.results.map((e) => ({
+    events: Array.from(byKey.values()).map((e) => { delete e.key; return e; }),
+    errors: results.reduce((a, r) => a.concat(r.notes), []),
+    checked: Date.now(),
+  };
+}
+
+async function getCalendar(env) {
+  const row = await env.DB.prepare("SELECT value, expires FROM cache WHERE key = 'calendar'").first();
+  let feed = row ? JSON.parse(row.value) : null;
+  if (Array.isArray(feed)) feed = { events: feed, errors: [], checked: 0 }; // saved by an older version
+  if (!feed || row.expires <= Date.now()) {
+    feed = await refreshCalendars(env, feed);
+    await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+      .bind('calendar', JSON.stringify(feed), Date.now() + CAL_TTL_MS).run();
+  }
+  const local = await env.DB.prepare('SELECT id, title, people, start, end FROM events WHERE end > ?').bind(Date.now() - 45 * DAY_MS).all();
+  return {
+    events: feed.events.concat(local.results.map((e) => ({
       id: e.id, title: e.title, people: JSON.parse(e.people), start: new Date(e.start).toISOString(), end: new Date(e.end).toISOString(), local: true,
     }))),
+    errors: feed.errors, checked: feed.checked,
   };
 }
 
