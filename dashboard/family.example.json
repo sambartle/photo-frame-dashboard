@@ -11,12 +11,7 @@
     { "id": "otto", "name": "Otto", "color": "#FFB000", "kid": true }
   ],
 
-  "calendars": [
-    { "_note": "Google Calendar → Settings → your calendar → 'Secret address in iCal format'", "url": "https://calendar.google.com/calendar/ical/.../basic.ics", "people": ["sam"] },
-    { "url": "https://calendar.google.com/calendar/ical/.../basic.ics", "people": ["alex"] },
-    { "url": "https://calendar.google.com/calendar/ical/.../basic.ics", "people": "all" }
-  ],
-
+  "_calendars": "Calendar links are private: put them in calendars.json (see calendars.example.json), which is uploaded as the CALENDARS secret, not here.",
   "routines": [
     { "id": "morning", "name": "Morning", "range": "6 – 11 AM", "from": 0, "to": 11 },
     { "id": "after", "name": "After school", "range": "11 AM – 5 PM", "from": 11, "to": 17 },

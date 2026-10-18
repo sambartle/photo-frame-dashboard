@@ -40,19 +40,21 @@ npx wrangler login
    npm run db:migrate
    ```
 
-2. **Your family.** Copy the example and edit it. It is gitignored because the calendar links are
-   private.
+2. **Your family.** Copy both examples and edit them. Both files are gitignored.
 
    ```bash
    cp family.example.json family.json
+   cp calendars.example.json calendars.json
    ```
 
    - `people`: names and colours. Set `"kid": true` for anyone who earns chore stars. Add
      `"ha": "person.x"` to show whether they're home.
-   - `calendars`: in Google Calendar, open **Settings → (the calendar) → Integrate calendar →
+   - `calendars.json`: in Google Calendar, open **Settings → (the calendar) → Integrate calendar →
      Secret address in iCal format**. Give each link the people it belongs to, or `"all"`. If the
      same invite appears on two calendars, it shows once with both people. To get a "Leave by"
-     reminder, add `Travel: 15` (minutes) anywhere in an event's description.
+     reminder, add `Travel: 15` (minutes) anywhere in an event's description. Anyone with one of
+     these links can read that calendar, so they go up as a secret (step 3), never into the
+     deployed code. If one leaks, **Reset** it on the same Google page and update the secret.
    - `chores`: `r` is the routine (`morning`, `after` or `evening` by default) and `who` is a
      person's id or `"any"`. Use `days` (`["mon", "thu"]`) for chores that aren't daily.
    - `home`: delete this section if you don't use Home Assistant; the Home tab then disappears.
@@ -62,8 +64,12 @@ npx wrangler login
 
    ```bash
    npx wrangler secret put DASHBOARD_KEY
+   npx wrangler secret put CALENDARS < calendars.json
    npx wrangler secret put HA_TOKEN      # only with Home Assistant: Profile → Security → Long-lived access tokens
    ```
+
+   Secrets are encrypted at Cloudflare and can't be read back, even from the dashboard. After
+   editing `calendars.json`, run the `CALENDARS` line again; no redeploy is needed.
 
 4. **Deploy.**
 
@@ -136,7 +142,7 @@ check what's connected.
 
 ```bash
 cp family.example.json family.json                                   # then edit
-printf 'DASHBOARD_KEY=dev\nHA_TOKEN=...\n' > .dev.vars
+printf 'DASHBOARD_KEY=dev\nHA_TOKEN=...\n' > .dev.vars                 # calendars: keep in family.json locally
 npm run db:migrate:local
 npm run build && npx wrangler dev --port 8787
 ```

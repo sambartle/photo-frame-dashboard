@@ -4,3 +4,4 @@ dist
 kiosk/build
 family.json
 .dev.vars
+calendars.json

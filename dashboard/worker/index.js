@@ -49,7 +49,7 @@ const CFG = (function () {
   });
   const alerts = (home && home.alerts) || {};
   return {
-    tz, people, chores, routines: RAW.routines || [], calendars: RAW.calendars || [],
+    tz, people, chores, routines: RAW.routines || [],
     location: RAW.location, stores, catOrder, catalog, usuals: shop.usuals || [],
     home, rooms, devices,
     scenes: home ? (home.scenes || []).map((s) => ({ id: s.entity, name: s.name, icon: s.icon || 'bolt' })) : [],
@@ -193,11 +193,21 @@ async function clearGroceries(env, b) {
 }
 
 // ------------------------------------------------------------------ calendar
+// The calendar links are private (anyone holding one can read that calendar), so they live in the
+// CALENDARS secret, which Cloudflare encrypts and never shows again, not in the deployed code.
+// `calendars` in family.json still works for local development.
+function calendarList(env) {
+  if (env.CALENDARS) {
+    try { return JSON.parse(env.CALENDARS); } catch (e) { throw new Error('CALENDARS secret is not valid JSON'); }
+  }
+  return RAW.calendars || [];
+}
+
 async function getCalendar(env) {
   const from = Date.now() - 45 * DAY_MS, to = Date.now() + 75 * DAY_MS;
   const all = CFG.people.map((p) => p.id);
   const feeds = await cached(env, 'calendar', 10 * 60e3, async () => {
-    const results = await Promise.all(CFG.calendars.map(async (cal, i) => {
+    const results = await Promise.all(calendarList(env).map(async (cal, i) => {
       const people = cal.people === 'all' ? all : [].concat(cal.people || []).filter((id) => all.indexOf(id) > -1);
       const res = await fetch(cal.url.replace(/^webcal:/, 'https:'), { headers: { 'user-agent': 'HomeHQ/1.0' } });
       if (!res.ok) throw new Error('calendar ' + (i + 1) + ': HTTP ' + res.status);
