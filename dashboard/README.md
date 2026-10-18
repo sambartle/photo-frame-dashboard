@@ -166,7 +166,8 @@ npx wrangler d1 execute home-hq --remote --command "DELETE FROM cache WHERE key 
 ```
 
 Add and change events in the Google Calendar app as usual; the frame follows within the same window.
-Events added with **+** on the frame stay on the dashboard and never reach Google. To remove a
+Events added with **+** on the frame stay on the dashboard and never reach Google. (Planned: writing
+them to Google through a service account the calendars are shared with.) To remove a
 calendar, delete its line and upload again. If a link may have leaked, also press **Reset** next to
 it in Google Calendar's settings, which kills the old link, and put the new one in.
 
