@@ -77,6 +77,7 @@
     "alerts": {
       "doorbell": { "entity": "binary_sensor.doorbell", "camera": "camera.front_porch", "lock": "lock.front_door" },
       "leak": { "entities": ["binary_sensor.laundry_leak"], "valve": "valve.water_main" },
+      "smoke": { "entities": ["binary_sensor.hallway_smoke", "binary_sensor.landing_co"] },
       "garageOpenMinutes": 15
     }
   }

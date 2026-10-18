@@ -11,7 +11,7 @@ behind it:
 | Chores, stars, weekly streaks | Chore list in `family.json`; ticks are stored in Cloudflare D1 |
 | Shopping list | Cloudflare D1, shared by every screen and phone that opens the dashboard |
 | Photos (slideshow, home tile, ambient mode) | Uploaded from a phone at `/upload`; stored in Cloudflare R2 |
-| Home tab, presence, doorbell/leak/garage alerts | Home Assistant REST API (optional) |
+| Home tab, presence, doorbell/leak/smoke/garage alerts | Home Assistant REST API (optional) |
 
 The kiosk app in [`kiosk/`](kiosk) shows it full screen on the frame.
 
@@ -275,6 +275,10 @@ seconds, so an alert can take up to 10 s to appear:
   hold-to-unlock.
 - `leak`: when any listed sensor turns on, take over the screen. If `valve` is set (a `valve.*` or a
   `switch.*`), hold to shut off the water.
+- `smoke`: when any listed smoke or carbon monoxide detector turns on, take over the screen and name
+  the detectors going off. Detectors with `co` in their entity id, or with Home Assistant's
+  `carbon_monoxide` device class, get the carbon monoxide wording. The frame only shows the alert;
+  it doesn't replace the alarms themselves.
 - `garageOpenMinutes`: show a banner when the garage has been open this long.
 
 Press and hold the clock in the sidebar, or press **D**, for display controls. From there you can

@@ -76,6 +76,26 @@
     };
   };
 
+  // Smoke or carbon monoxide: list = [{ name, co }] of the detectors going off.
+  App.smoke = function (list) {
+    var now = App.now(), co = list.length && list.every(function (s) { return s.co; });
+    var el = takeover(
+      '<div class="tk-alarm">' +
+      '  <div class="tk-alarm-icon">' + App.icon('flame', 88) + '</div>' +
+      '  <div class="label label--light">Critical alert · ' + App.fmt.time(now) + '</div>' +
+      '  <h1 class="tk-huge">' + (co ? 'Carbon monoxide' : 'Smoke alarm') + '</h1>' +
+      '  <p class="tk-sub">' + App.esc(list.map(function (s) { return s.name; }).join(', ')) + '. ' +
+      (co ? 'Open windows and get everyone outside.' : 'Check it now. If there’s a fire, get everyone out.') + '</p>' +
+      '  <div class="tk-actions">' +
+      '    <button class="tk-btn tk-btn--solid tk-btn--light" data-ack>' + App.icon('check', 30) + '<span>Acknowledge</span></button>' +
+      '  </div>' +
+      '</div>', 'takeover--alarm');
+    el.querySelector('[data-ack]').onclick = function () {
+      closeTakeover();
+      App.toast((co ? 'CO' : 'Smoke') + ' alarm acknowledged', { icon: 'check' });
+    };
+  };
+
   // ------------------------------------------------------------ banners (amber, actionable)
   App.banner = function (opts) {
     var box = $('#banners');
@@ -111,7 +131,7 @@
       '<div class="demo-sec"><div class="label label--light">Modes</div><div class="demo-grid">' +
       '<button data-mode="ambient">Ambient</button><button data-mode="night">Night</button><button data-fastidle>' + (App.idle.home < 60 ? 'Idle: fast ✓' : 'Idle: fast') + '</button><button data-reload>Refresh data</button></div></div>' +
       (D.hasHome ? '<div class="demo-sec"><div class="label label--light">Test alerts (nothing is sent to the house)</div><div class="demo-grid">' +
-      '<button data-alert="doorbell">Doorbell</button><button data-alert="leak">Water leak</button><button data-alert="garage">Garage open</button></div></div>' : '') +
+      '<button data-alert="doorbell">Doorbell</button><button data-alert="leak">Water leak</button><button data-alert="smoke">Smoke</button><button data-alert="garage">Garage open</button></div></div>' : '') +
       '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p></div>' +
       '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–6</b> views</p>' +
       '</div>';
@@ -149,7 +169,8 @@
     if (b.dataset.alert) {
       closeDemo();
       // Previews only: the leak valve and door lock still need a deliberate hold to act.
-      ({ doorbell: App.doorbell, leak: App.leak, garage: function () { App.garageOpenAlert(15); } })[b.dataset.alert]();
+      ({ doorbell: App.doorbell, leak: App.leak, smoke: function () { App.smoke([{ name: 'Test: Landing', co: false }]); },
+        garage: function () { App.garageOpenAlert(15); } })[b.dataset.alert]();
       return;
     }
     if (b.hasAttribute('data-reload')) {

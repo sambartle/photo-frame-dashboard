@@ -339,11 +339,17 @@ async function getHome(env) {
     sensors: {
       doorbell: doorbell ? { state: doorbell.state, changed: doorbell.last_changed } : null,
       leak: ((al.leak && al.leak.entities) || []).some((e) => by[e] && by[e].state === 'on'),
+      // Smoke and CO detectors that are going off right now, by name, so the alert can say where.
+      smoke: ((al.smoke && al.smoke.entities) || []).filter((e) => by[e] && by[e].state === 'on').map((e) => {
+        const a = by[e].attributes || {};
+        return { name: a.friendly_name || e, co: a.device_class === 'carbon_monoxide' || /(^|[._])co(_|$)|carbon_monoxide/.test(e) };
+      }),
       garageOpenSince: garage && garage.state !== 'closed' && by[garage.id] ? by[garage.id].last_changed : null,
     },
     alertConfig: {
       doorbell: !!al.doorbell, doorbellCamera: al.doorbell && al.doorbell.camera || null, doorbellLock: al.doorbell && al.doorbell.lock || null,
-      waterValve: !!(al.leak && al.leak.valve), garageOpenMinutes: al.garageOpenMinutes || 0,
+      waterValve: !!(al.leak && al.leak.valve), smoke: !!(al.smoke && al.smoke.entities && al.smoke.entities.length),
+      garageOpenMinutes: al.garageOpenMinutes || 0,
     },
   };
 }

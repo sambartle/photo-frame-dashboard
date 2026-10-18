@@ -136,6 +136,9 @@
     if (cfg.doorbell && now.doorbell && prev.doorbell && now.doorbell.changed !== prev.doorbell.changed &&
       ['unavailable', 'unknown'].indexOf(now.doorbell.state) < 0) App.doorbell();
     if (now.leak && !prev.leak) App.leak();
+    // Smoke/CO: take over when a detector goes off that wasn't already going off.
+    var was = (prev.smoke || []).map(function (s) { return s.name; });
+    if ((now.smoke || []).some(function (s) { return was.indexOf(s.name) < 0; })) App.smoke(now.smoke);
     if (cfg.garageOpenMinutes && now.garageOpenSince && garageAlerted !== now.garageOpenSince) {
       var mins = (Date.now() - Date.parse(now.garageOpenSince)) / 60000;
       if (mins >= cfg.garageOpenMinutes) { garageAlerted = now.garageOpenSince; App.garageOpenAlert(Math.round(mins)); }
