@@ -56,8 +56,10 @@
 .h-hero-foot .dots i { box-shadow: 0 0 0 3px var(--c); }
 .h-hero-count { font-size: 150px; line-height: .78; letter-spacing: -.04em; text-align: right; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; }
 .h-hero-count small { font-size: 22px; letter-spacing: .1em; text-transform: uppercase; font-stretch: 80%; margin-top: 10px; }
-.h-hero--empty { background: var(--ink); color: var(--paper); flex-direction: column; justify-content: center; }
-.h-hero--empty .h-hero-title { white-space: normal; font-size: 56px; }
+.h-hero--empty { background: var(--ink); color: var(--paper); flex-direction: column; justify-content: flex-start; }
+.h-hero--empty .h-hero-title { white-space: normal; font-size: 54px; line-height: 1; margin: 10px 0 0; overflow: visible; }
+/* "Tomorrow starts with …" sits on the bottom edge on one line, clear of the title's descenders */
+.h-hero--empty .h-hero-meta { margin-top: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .h-lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; min-height: 0; }
 .h-lane { display: flex; flex-direction: column; gap: 6px; min-width: 0; border-top: 6px solid var(--c); padding-top: 10px; }

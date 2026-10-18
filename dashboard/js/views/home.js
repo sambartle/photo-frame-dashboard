@@ -31,7 +31,8 @@
   // Only people with a Home Assistant person entity; everyone else's whereabouts are unknown.
   function presence() {
     return D.people.filter(function (p) { return p.tracked; }).map(function (p) {
-      var sub = p.home ? 'Home' : (p.eta ? '<b>ETA ' + p.eta + ' min</b>' : p.status);
+      // No status yet (Home Assistant offline or still loading): show a dash, not "undefined".
+      var sub = p.home ? 'Home' : (p.eta ? '<b>ETA ' + p.eta + ' min</b>' : App.esc(p.status || '–'));
       return '<div class="h-who' + (p.home ? ' is-home' : '') + '" style="' + App.pstyle(p) + '">' +
         App.avatar(p, 36, p.home ? '' : 'avatar--away') +
         '<span><b>' + p.name + '</b><small>' + sub + '</small></span></div>';
