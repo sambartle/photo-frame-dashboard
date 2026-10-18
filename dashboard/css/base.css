@@ -309,3 +309,13 @@ button.card:active, .h-hero:active, .h-photo:active { transform: scale(.985); }
 }
 .diag b { color: #fff; }
 .diag u { text-decoration: none; color: #aaa; }
+
+/* Phones in portrait: the 1280×800 stage scales to a thin strip, so point people at landscape.
+   Never matches the frame (1280×800 landscape). */
+@media (orientation: portrait) and (max-width: 700px) {
+  body::after {
+    content: "Turn your phone sideways for the full dashboard";
+    position: fixed; left: 0; right: 0; bottom: 12%;
+    text-align: center; color: #9a958b; font: 500 15px/1.4 var(--sans); letter-spacing: .02em;
+  }
+}
