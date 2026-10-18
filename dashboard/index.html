@@ -5,6 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <meta name="theme-color" content="#F2EEE6">
   <title>Home HQ</title>
+  <script>
+    // Phones get the phone page (/m): same data, laid out for a small screen. The frame and other
+    // big screens (shorter side 600 px or more) stay here. /?wall keeps a phone on the wall view;
+    // /?phone undoes that.
+    (function () {
+      try {
+        if (/[?&]phone\b/.test(location.search)) localStorage.removeItem('hq-wall');
+        if (/[?&]wall\b/.test(location.search)) { localStorage.setItem('hq-wall', '1'); return; }
+        if (localStorage.getItem('hq-wall') === '1') return;
+      } catch (e) {}
+      if (Math.min(screen.width, screen.height) < 600) location.replace('/m');
+    })();
+  </script>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
