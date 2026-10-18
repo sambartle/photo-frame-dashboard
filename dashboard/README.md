@@ -94,11 +94,168 @@ npx wrangler login
 After editing `family.json`, run `npm run deploy` again. Lists, ticks and photos live in D1 and R2
 and aren't touched by a deploy.
 
+## Running it day to day
+
+Run every `npx wrangler` and `npm run` command from the `dashboard` folder. From anywhere else
+wrangler can't find `wrangler.jsonc` and stops with "Required Worker name missing".
+
+| To change… | Edit | Then | Shows up |
+| --- | --- | --- | --- |
+| The dashboard code | the files in `dashboard/` | `npm run deploy`, then reload the frame | at the next reload |
+| People, chores, routines, stores, shopping catalog, weather location | `family.json` | `npm run deploy`, then reload the frame | at the next reload |
+| Calendars | `calendars.json` | `npx wrangler secret put CALENDARS < calendars.json` | within ~15 min, no deploy |
+| Home Assistant devices | `home` in `family.json` | `npm run deploy` | within ~10 s of the reload |
+| Home Assistant token | in Home Assistant | `npx wrangler secret put HA_TOKEN` | immediately |
+| The dashboard key | — | `npx wrangler secret put DASHBOARD_KEY`, then re-key every device | immediately |
+| Shopping list, chore ticks, photos | on a screen or phone | nothing | within 30 s on other screens |
+
+### Update the dashboard
+
+```bash
+npm run deploy                 # builds and uploads; takes about 20 s
+```
+
+The frame keeps running the copy it already loaded. To pick up the new one, open the kiosk menu (hold
+two fingers still for 1.5 s) and tap **Reload dashboard**, or power-cycle the frame. Phones get it
+the next time the page is opened.
+
+If an update adds a file in `migrations/`, create the new tables before deploying:
+
+```bash
+npm run db:migrate
+```
+
+To undo a bad deploy:
+
+```bash
+npx wrangler versions list     # find the previous version id
+npx wrangler rollback <version-id>
+```
+
+### Family, chores and shopping
+
+All in `family.json`, then `npm run deploy`:
+
+- **People:** `id`, `name`, `color`. Add `"kid": true` for chore stars and `"ha": "person.x"` for the
+  home/away display. Changing someone's `id` detaches their existing chore ticks and calendar mapping.
+- **Routines:** the parts of the day chores are grouped into, with `from` and `to` hours.
+- **Chores:** `r` is a routine id, `who` a person id or `"any"`. `days` limits a chore to certain
+  weekdays (`["tue"]` for bin night). A chore's id is made from its routine, person and title. If
+  you rename one, today's tick for it is lost; give it a fixed `"id"` to avoid that.
+- **Shopping:**
+  - `stores` sets the filter buttons. New items go to the first store, or to the one being viewed.
+  - `categories` sets the aisle order, and `storeOrder` can reorder the aisles per store.
+  - `catalog` maps item names to aisles; unknown items go under "Other".
+  - `usuals` are the quick-add tiles on the frame.
+  - If you remove a store, items already listed under it still show under **All**.
+
+### Calendars
+
+Each entry in `calendars.json` is a Google Calendar secret iCal link and the people it belongs to:
+`["sam"]`, `["laura", "sam"]` or `"all"`. After any change, upload the file again:
+
+```bash
+npx wrangler secret put CALENDARS < calendars.json
+```
+
+The Worker re-reads calendars at most every 10 minutes and the frame asks every 5, so allow up to
+about 15 minutes. To refresh straight away:
+
+```bash
+npx wrangler d1 execute home-hq --remote --command "DELETE FROM cache WHERE key = 'calendar'"
+```
+
+Add and change events in the Google Calendar app as usual; the frame follows within the same window.
+Events added with **+** on the frame stay on the dashboard and never reach Google. To remove a
+calendar, delete its line and upload again. If a link may have leaked, also press **Reset** next to
+it in Google Calendar's settings, which kills the old link, and put the new one in.
+
+### Connecting devices
+
+- **A phone or computer:** open `https://<your dashboard>/?key=<DASHBOARD_KEY>` once. Phones get
+  the phone page (shopping, chores, photos); bigger screens get the wall dashboard. Open the address
+  with `?wall` to see the wall dashboard on a phone, and with `?phone` to switch back.
+- **A frame:** `scripts/set-kiosk-url.sh 'https://<your dashboard>/?key=<DASHBOARD_KEY>'` from the
+  repository root, with the frame on ADB.
+- **Change the key**, for example if a link with it was shared:
+  `npx wrangler secret put DASHBOARD_KEY` with a new `openssl rand -hex 24`. Every device then shows
+  "Not connected" until it has opened the address with the new key once.
+
+### Photos
+
+On a phone, open `/upload` (or **Photos** on the phone page). Pick **Added by**, an optional place,
+and the photos. They're resized on the phone, and the location and other hidden metadata are
+removed; only the date taken is kept. The same page lists every photo with a delete button. On the
+frame, the heart on the Photos tab marks favourites, which come up more often.
+
+### Backups
+
+Shopping, chores and frame-added events live in D1:
+
+```bash
+npx wrangler d1 export home-hq --remote --output home-hq-backup.sql
+```
+
+The photos are copies of ones on your phone, so they don't need a separate backup.
+
+### When something looks wrong
+
+- **The frame or a phone says "Not connected":** it doesn't have the current key. Open the address
+  with `?key=` again.
+- **Taps do nothing on the frame:** reload it from the kiosk menu (two-finger hold). That fault was
+  fixed in the kiosk app, so if it still happens, rebuild the kiosk from current code.
+- **See what's connected:** on the frame, press and hold the clock in the sidebar (or press **D** on a
+  keyboard). **Status** lists the number of calendar events, the number of photos, and the state of
+  weather and Home Assistant, including Home Assistant's error message.
+- **The Worker's live log:** `npx wrangler tail` shows each request and any error, such as a
+  calendar link that stopped working or `exceeded CPU`.
+- **Check the secrets are set:** `npx wrangler secret list` shows their names, never their values.
+
 ## Home Assistant
 
 The Worker runs in Cloudflare's network, not your house, so it needs an HTTPS address for Home
-Assistant: [Nabu Casa](https://www.nabucasa.com) remote access or a Cloudflare Tunnel. Put that in
-`home.url`. Only entities listed in `family.json` can be read or controlled through the dashboard.
+Assistant: [Nabu Casa](https://www.nabucasa.com) remote access or a Cloudflare Tunnel. Only
+entities listed in `family.json` can be read or controlled through the dashboard.
+
+### Connect it
+
+1. **Address.** Use the external address you already open Home Assistant with away from home, for
+   example `https://ha.example.com` from a Cloudflare Tunnel or `https://xxxx.ui.nabu.casa`. If that
+   address sits behind Cloudflare Access (a login page), the Worker can't get past it. Add an Access
+   policy that lets `/api/` through for a service token, or bypass Access for `/api/`, which still
+   leaves Home Assistant's own token check in place.
+2. **A user just for the dashboard.** In Home Assistant, open **Settings → People → Users → Add user**,
+   for example "Frame". Leave **Administrator** off; it can still read states and switch lights,
+   locks and scenes. Log in as that user, then open **Profile → Security → Long-lived access tokens →
+   Create token**.
+3. **The token**, as a secret, from the `dashboard` folder:
+
+   ```bash
+   npx wrangler secret put HA_TOKEN
+   ```
+
+4. **The `home` section** in `family.json`:
+   - `url`: the address from step 1.
+   - `rooms`: each with its `devices`, as `{ "entity": "light.kitchen", "name": "Kitchen" }`.
+   - optionally `climate`, `media`, `cameras`, `scenes` and `alerts`. See `family.example.json` and the
+     table below.
+
+   Add `"ha": "person.sam"` to each person who has a `person.` entity. Find entity ids in
+   **Settings → Devices & services → Entities**. Then deploy:
+
+   ```bash
+   npm run deploy
+   ```
+
+5. **Check it.** The Home tab appears on the frame. **Status** in the display controls (hold the clock)
+   says "Home Assistant connected", or shows its error: a wrong address, a token rejected
+   (`HTTP 401`), or the address unreachable from the internet.
+
+To add or remove devices later, edit `home` and deploy again. If the token is lost or leaked, delete
+it under that user's **Profile → Security** and put a new one in with `npx wrangler secret put HA_TOKEN`.
+To turn Home Assistant off, remove the `home` section and deploy; the Home tab disappears.
+
+### What each entity becomes
 
 | `family.json` entry | Tile | Service calls |
 | --- | --- | --- |
