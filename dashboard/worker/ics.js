@@ -8,15 +8,20 @@ function ymd(t) {
   return t.year + '-' + String(t.month).padStart(2, '0') + '-' + String(t.day).padStart(2, '0');
 }
 
-// "Travel: 15" (or "travel 15 min") anywhere in the description becomes a leave-by reminder.
+// "Travel: 15", "travel 15", "Travel time - 15 min" anywhere in the description becomes a leave-by
+// reminder. Google keeps formatted descriptions as HTML, so tags and entities are removed first.
+function plainText(desc) {
+  return (desc || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
 function travelFrom(desc) {
-  const m = /travel:?\s*(\d{1,3})/i.exec(desc || '');
+  const m = /travel(?:\s*time)?\s*[:\-\u2013=]?\s*(\d{1,3})/i.exec(plainText(desc));
   return m ? +m[1] : undefined;
 }
 
 function toEvent(id, details, people) {
   const s = details.startDate, e = details.endDate || details.startDate, item = details.item;
-  const desc = (item.description || '').trim();
+  const desc = plainText(item.description).trim();
   const ev = { id, title: item.summary || '(busy)', people };
   if (s.isDate) {
     ev.allDay = true;
