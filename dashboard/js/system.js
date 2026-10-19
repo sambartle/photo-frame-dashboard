@@ -137,7 +137,9 @@
   function status() {
     var bits = [D.events.length + ' calendar events', D.photos.length + ' photos', D.weather ? 'weather ok' : 'no weather'];
     (D.calendarErrors || []).forEach(function (e) { bits.push(App.esc(e)); });
-    if (D.hasHome) bits.push(D.homeOnline ? 'Home Assistant connected' : 'Home Assistant offline' + (D.homeError ? ' (' + App.esc(D.homeError) + ')' : ''));
+    // Short form: "HA offline (unreachable)", not "Home Assistant offline (Home Assistant unreachable)".
+    var haErr = (D.homeError || '').replace(/^Home Assistant:?\s*/, '');
+    if (D.hasHome) bits.push(D.homeOnline ? 'HA connected' : 'HA offline' + (haErr ? ' (' + App.esc(haErr) + ')' : ''));
     return bits.join(' · ');
   }
   App.openDemo = function () {
