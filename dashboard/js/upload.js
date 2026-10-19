@@ -102,9 +102,7 @@ function list() {
 }
 
 $('#from').addEventListener('change', function () { try { localStorage.setItem('hq-from', this.value); } catch (e) {} });
-$('#files').addEventListener('change', function () {
-  var files = Array.prototype.slice.call(this.files);
-  this.value = '';
+function addFiles(files) {
   var chain = Promise.resolve();
   files.forEach(function (f) {
     var li = document.createElement('li');
@@ -113,8 +111,50 @@ $('#files').addEventListener('change', function () {
     $('#queue').appendChild(li);
     chain = chain.then(function () { li.lastChild.textContent = 'Uploading…'; return upload(f, li); });
   });
-  chain.then(list);
+  return chain.then(list);
+}
+$('#files').addEventListener('change', function () {
+  var files = Array.prototype.slice.call(this.files);
+  this.value = '';
+  addFiles(files);
 });
+
+// ------------------------------------------------------------ shared from the phone's gallery
+// Share → Home HQ posts the photos to /share; public/share-sw.js keeps them in a cache and opens
+// this page with ?shared. They wait for "Upload" so "Where" can be filled in first.
+function sharedFiles() {
+  if (!window.caches) return Promise.resolve([]);
+  return caches.open('hq-share').then(function (c) {
+    return c.keys().then(function (keys) {
+      return Promise.all(keys.map(function (k) {
+        return c.match(k).then(function (r) {
+          return r.blob().then(function (b) {
+            return new File([b], decodeURIComponent(r.headers.get('x-name') || 'photo.jpg'), { type: b.type, lastModified: +r.headers.get('x-modified') || Date.now() });
+          });
+        });
+      }));
+    });
+  });
+}
+function clearShared() { return window.caches ? caches.delete('hq-share') : Promise.resolve(); }
+if (/[?&]shared/.test(location.search)) {
+  sharedFiles().then(function (files) {
+    var box = $('#shared');
+    box.hidden = false;
+    if (!files.length) {
+      box.querySelector('span').textContent = 'The shared photos didn’t come through. Choose them below instead.';
+      box.querySelector('button').hidden = true;
+      return;
+    }
+    box.querySelector('span').textContent = files.length + (files.length === 1 ? ' shared photo' : ' shared photos') + ' ready.';
+    box.querySelector('button').onclick = function () {
+      box.hidden = true;
+      history.replaceState(null, '', '/upload');
+      addFiles(files).then(clearShared);
+    };
+  });
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/share-sw.js').catch(function () {});
 $('#grid').addEventListener('click', function (e) {
   var b = e.target.closest('[data-del]');
   if (!b || !confirm('Delete this photo from the frame?')) return;

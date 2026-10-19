@@ -192,4 +192,6 @@ document.addEventListener('visibilitychange', function () { if (!document.hidden
 
 showTab('shopping');
 load();
+// Registers the share target (Share → Home HQ in the gallery) once the app is installed.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/share-sw.js').catch(function () {});
 setInterval(function () { if (!document.hidden) load(); }, POLL_MS);

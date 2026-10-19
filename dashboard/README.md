@@ -193,6 +193,12 @@ and the photos. They're resized on the phone, and the location and other hidden 
 removed; only the date taken is kept. The same page lists every photo with a delete button. On the
 frame, the heart on the Photos tab marks favourites, which come up more often.
 
+**Share from the gallery (Android):** open the phone page in Chrome and choose **Install app** (or
+**Add to Home screen**) from the menu, once per phone. **Home HQ** then appears when you tap
+**Share** on photos in the gallery or Google Photos. They open on the upload page, ready to go:
+add a place if you like and tap **Upload**. iPhones can't add web apps to the share menu, so they
+keep using `/upload`.
+
 ### Backups
 
 Shopping and frame-added events live in D1 (plus old chore ticks in `chore_log`, kept but no longer used):

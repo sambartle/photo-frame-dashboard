@@ -626,6 +626,9 @@ export default {
         },
       });
     }
+    // A share that arrived before the phone's service worker was running: the photos can't be
+    // kept here (the upload needs the key), so open the upload page to pick them again.
+    if (url.pathname === '/share' && req.method === 'POST') return Response.redirect(url.origin + '/upload?shared=0', 303);
     if (url.pathname.indexOf('/api/') !== 0) return env.ASSETS.fetch(req);
     if (!sameKey(cookieKey(req) || req.headers.get('x-hq-key'), env.DASHBOARD_KEY)) return bad('locked', 401);
     try {
