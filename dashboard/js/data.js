@@ -8,7 +8,7 @@ window.DATA = {
   groceries: [], catalog: [], usuals: [],
   hasHome: false, homeOnline: false, homeError: null,
   rooms: [], devices: [], climate: null, media: null, cameras: [], scenes: [],
-  sensors: {}, alertConfig: {}, energy: null,
+  sensors: {}, alertConfig: {}, energy: null, checks: null, awayOffMinutes: 0,
   weather: null, warnings: [],
   bins: null,
   photos: []

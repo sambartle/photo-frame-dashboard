@@ -1,6 +1,9 @@
 /* Ambient (idle photo frame) */
 .ambient { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 65; background: #000; display: none; color: #fff; cursor: pointer; }
 .stage[data-mode="ambient"] .ambient { display: block; }
+/* Everyone away: black (the kiosk also turns the backlight down); any tap wakes it */
+.screenoff { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 66; background: #000; display: none; }
+.stage[data-mode="off"] .screenoff { display: block; }
 .amb-stage { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
 .amb-scrim { position: absolute; left: 0; right: 0; bottom: 0; height: 60%; background: linear-gradient(0deg, rgba(0, 0, 0, .75), rgba(0, 0, 0, 0)); pointer-events: none; }
 .amb-info { position: absolute; left: 60px; right: 60px; bottom: 48px; display: flex; justify-content: space-between; align-items: flex-end; }

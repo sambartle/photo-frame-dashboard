@@ -236,16 +236,44 @@
     if (!D.homeOnline) return '<div class="label">Home</div><div class="h-st-row is-warn">' + App.icon('bolt', 24) + '<span>Can’t reach Home Assistant</span></div>';
     var lights = D.devices.filter(function (d) { return d.type === 'light' && d.on; }).length;
     var unlocked = D.devices.filter(function (d) { return d.type === 'lock' && !d.locked; });
-    var garage = D.devices.filter(function (d) { return d.type === 'garage'; })[0];
-    var garageOpen = garage && garage.state !== 'closed';
-    var secure = !unlocked.length && !garageOpen;
-    var secText = secure ? 'All locked' : (garageOpen ? 'Garage open' : unlocked[0].name + ' unlocked');
+    var issues = App.homeIssues();
+    var secText = issues.length ? App.esc(issues[0]) + (issues.length > 1 ? ' +' + (issues.length - 1) : '') : 'All clear';
     return '<div class="label">Home</div>' +
       '<div class="h-st-row">' + App.icon('bulb', 24) + '<b class="num">' + lights + '</b><span>lights on</span></div>' +
-      '<div class="h-st-row' + (secure ? '' : ' is-warn') + '">' + App.icon(secure ? 'lock' : 'unlock', 24) + '<span>' + secText + '</span></div>' +
+      '<div class="h-st-row' + (issues.length ? ' is-warn' : '') + '" data-checks>' + App.icon(issues.length ? (unlocked.length ? 'unlock' : 'alert') : 'check', 24) + '<span>' + secText + '</span></div>' +
       (D.climate && D.climate.current != null ? '<div class="h-st-row">' + App.icon('thermo', 24) + '<b class="num">' + D.climate.current + '°</b><span>inside</span></div>' : '') +
       energy();
   }
+  // Everything that isn't as it should be, most urgent first: doors, then water, then sensors.
+  // Shown on the Home card's "All clear" line; tap it for the list.
+  App.homeIssues = function () {
+    var out = [], C = D.checks || {};
+    D.devices.filter(function (d) { return d.type === 'lock' && !d.locked; }).forEach(function (d) { out.push(d.name + ' unlocked'); });
+    var garage = D.devices.filter(function (d) { return d.type === 'garage'; })[0];
+    if (garage && garage.state !== 'closed') out.push('Garage open');
+    if (C.valveClosed) out.push('Water main off');
+    if (C.smokeOffline && C.smokeOffline.length) out.push(C.smokeOffline.length === 1 ? C.smokeOffline[0] + ' offline' : C.smokeOffline.length + ' smoke alarms offline');
+    if (C.leaksOffline && C.leaksOffline.length) out.push(C.leaksOffline.length === 1 ? C.leaksOffline[0] + ' offline' : C.leaksOffline.length + ' leak sensors offline');
+    if (C.lowBattery && C.lowBattery.length) out.push(C.lowBattery.length === 1 ? C.lowBattery[0].name + ' battery ' + C.lowBattery[0].pct + '%' : C.lowBattery.length + ' batteries low');
+    return out;
+  };
+  function checksSheet() {
+    var C = D.checks || {}, issues = App.homeIssues();
+    var ok = function (t) { return '<li class="ck-ok">' + App.icon('check', 22) + '<span>' + t + '</span></li>'; };
+    var bad = function (t) { return '<li class="ck-bad">' + App.icon('alert', 22) + '<span>' + App.esc(t) + '</span></li>'; };
+    var list = issues.map(bad);
+    if (C.leakTotal && !(C.leaksOffline || []).length) list.push(ok('All ' + C.leakTotal + ' leak sensors reporting'));
+    if (C.smokeTotal && !(C.smokeOffline || []).length) list.push(ok('All ' + C.smokeTotal + ' smoke and CO alarms reporting'));
+    if (C.valveClosed === false) list.push(ok('Water main on'));
+    if (!(C.lowBattery || []).length && (C.leakTotal || C.smokeTotal)) list.push(ok('No low batteries'));
+    if (issues.length > 1 || (C.leaksOffline || []).length > 1 || (C.smokeOffline || []).length > 1 || (C.lowBattery || []).length > 1) {
+      var names = (C.leaksOffline || []).concat(C.smokeOffline || []).map(function (n) { return n + ': offline'; })
+        .concat((C.lowBattery || []).map(function (b) { return b.name + ': battery ' + b.pct + '%'; }));
+      if (names.length) list.push('<li class="ck-detail">' + names.map(App.esc).join('<br>') + '</li>');
+    }
+    App.sheet('<div class="sheet-pad ck"><div class="label">Home checks</div><h2 class="serif">' + (issues.length ? 'Needs a look' : 'All clear') + '</h2><ul>' + list.join('') + '</ul></div>');
+  }
+
   // Spend today, or the draw right now when it's high (kettle, oven and washer at once).
   function energy() {
     var E = D.energy;
@@ -297,6 +325,7 @@
           if (ev) { App.eventSheet(App.findEvent(ev.dataset.ev)); return; }
           if (e.target.closest('[data-warn]')) { warningSheet(); return; }
           if (e.target.closest('[data-bins]')) { binsTap(); return; }
+          if (e.target.closest('[data-checks]') && D.checks) { checksSheet(); return; }
           var g = e.target.closest('[data-go]');
           if (g) App.go(g.dataset.go);
         });

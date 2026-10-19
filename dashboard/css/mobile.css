@@ -96,3 +96,5 @@ main { padding: 12px 16px 24px; max-width: 640px; margin: 0 auto; }
 .toast button { border: 0; background: none; color: #fff; font-weight: 700; text-decoration: underline; padding: 0; }
 
 .msg { padding: 16px; border-radius: var(--r); background: var(--card); border: 1px solid var(--alert); color: var(--alert); line-height: 1.45; }
+.msg--frames { margin-bottom: 14px; border-color: var(--amber); color: #8A4B00; }
+.msg--frames[hidden] { display: none; }

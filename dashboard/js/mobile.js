@@ -28,8 +28,25 @@ function save(method, path, body) {
     throw err;
   });
 }
+// A wall display that hasn't checked in for 15 minutes is probably off, frozen or offline.
+var framesAt = 0;
+function checkFrames() {
+  if (Date.now() - framesAt < 120e3) return;
+  framesAt = Date.now();
+  return api('GET', '/frames').then(function (list) {
+    var quiet = list.filter(function (f) { return Date.now() - f.seen >= 15 * 60e3; });
+    var box = $('#frameWarn');
+    box.hidden = !quiet.length;
+    box.innerHTML = quiet.map(function (f) {
+      var mins = Math.round((Date.now() - f.seen) / 60000);
+      return '<b>' + esc(f.name) + '</b> hasn’t checked in for ' + (mins < 120 ? mins + ' min' : Math.round(mins / 60) + ' hours') + '.';
+    }).join('<br>') + (quiet.length ? ' Check it’s on and on Wi-Fi.' : '');
+  }).catch(function () {});
+}
+
 function load() {
   var started = Date.now();
+  checkFrames();
   return api('GET', '/state').then(function (d) {
     if (S.wrote >= started) return; // a save raced this poll
     var text = JSON.stringify(d);

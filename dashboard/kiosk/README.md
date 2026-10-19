@@ -25,6 +25,18 @@ URL when run without one.
 Every later launch, including after a reboot, opens the saved URL. Links that other apps open
 in the kiosk, such as a sign-in page, are shown but not saved.
 
+## What the page can ask the kiosk (1.2)
+
+Pages shown in the kiosk get `window.HomeHQKiosk` with two calls:
+
+- `setScreenOff(true|false)`: backlight to zero (the screen still takes taps) or back to Android's
+  own brightness, adaptive if that's on. A new page always starts lit.
+- `info()`: JSON with the kiosk version, device model, Android version and Wi-Fi signal in dBm.
+
+The dashboard uses them to turn the screen off while everyone is away and to report each frame's
+health in the display controls. Any page shown in the kiosk can call them, so they do nothing more
+than this. Wi-Fi signal needs `ACCESS_WIFI_STATE`, a normal permission granted at install.
+
 ## A page bundled in the APK (no server)
 
 A static page can ship inside the APK instead of being hosted. Build with `KIOSK_SITE` set to a

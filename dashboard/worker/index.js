@@ -45,8 +45,9 @@ const CFG = (function () {
   const alerts = (home && home.alerts) || {};
   const bins = RAW.bins && RAW.bins.every && RAW.bins.every.length ? RAW.bins : null;
   const warnings = RAW.warnings && RAW.warnings.region ? RAW.warnings : null;
+  const display = RAW.display || {};
   return {
-    tz, people, bins, warnings,
+    tz, people, bins, warnings, display,
     location: RAW.location, stores, catOrder, catalog, usuals: shop.usuals || [],
     home, rooms, devices,
     scenes: home ? (home.scenes || []).map((s) => ({ id: s.entity, name: s.name, icon: s.icon || 'bolt' })) : [],
@@ -133,6 +134,25 @@ async function setBinsOut(env, b) {
   return json(await binsState(env));
 }
 
+// ------------------------------------------------------------------ frames
+// Each wall display checks in every 5 minutes; the list shows when one has gone quiet.
+async function frameBeat(env, b) {
+  const id = str(b.id, 40);
+  if (!/^[a-z0-9]{6,40}$/.test(id)) return bad('id required');
+  const row = {
+    id, name: str(b.name, 40) || 'Frame', version: str(b.version, 20), build: str(b.build, 40), kiosk: str(b.kiosk, 20),
+    rssi: typeof b.rssi === 'number' ? Math.round(b.rssi) : null, model: str(b.model, 60), android: str(b.android, 10),
+    loaded: typeof b.loaded === 'number' ? b.loaded : null, seen: Date.now(),
+  };
+  await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+    .bind('frame:' + id, JSON.stringify(row), Date.now() + 30 * 864e5).run();
+  return json({ ok: true });
+}
+async function listFrames(env) {
+  const rows = await env.DB.prepare("SELECT value FROM cache WHERE key LIKE 'frame:%' AND expires > ?").bind(Date.now()).all();
+  return rows.results.map((r) => JSON.parse(r.value)).sort((a, b) => (a.name < b.name ? -1 : 1));
+}
+
 // ------------------------------------------------------------------ state (shopping, photos, bins)
 async function getState(env) {
   const [groceries, photos, bins] = await Promise.all([
@@ -148,6 +168,8 @@ async function getState(env) {
     hasHome: !!CFG.home,
     scenes: CFG.scenes, cameras: CFG.cameras,
     bins,
+    // Minutes everyone known to Home Assistant must be away before the screen turns off (0 = never).
+    awayOffMinutes: CFG.display.awayOffMinutes || 0,
   };
 }
 
@@ -412,11 +434,36 @@ async function getHome(env) {
       garageOpenSince: garage && garage.state !== 'closed' && by[garage.id] ? by[garage.id].last_changed : null,
     },
     energy: energyView(H.energy, by),
+    checks: checksView(al, by),
     alertConfig: {
       doorbell: !!al.doorbell, doorbellCamera: al.doorbell && al.doorbell.camera || null, doorbellLock: al.doorbell && al.doorbell.lock || null,
       waterValve: !!(al.leak && al.leak.valve), smoke: !!(al.smoke && al.smoke.entities && al.smoke.entities.length),
       garageOpenMinutes: al.garageOpenMinutes || 0,
     },
+  };
+}
+
+// The "all clear" line: sensors behind the alerts that have gone quiet, the water main, and low
+// batteries on those same devices (a sensor.<name>_battery whose <name> starts the alert entity's).
+function checksView(al, by) {
+  const off = (id) => !by[id] || by[id].state === 'unavailable' || by[id].state === 'unknown';
+  const name = (id) => (by[id] && by[id].attributes.friendly_name) || id;
+  const leaks = (al.leak && al.leak.entities) || [], smoke = (al.smoke && al.smoke.entities) || [];
+  const watched = leaks.concat(smoke).map((id) => id.split('.')[1]);
+  const lowBattery = Object.keys(by).filter((id) => {
+    const s = by[id], a = s.attributes || {};
+    if (id.indexOf('sensor.') !== 0 || a.device_class !== 'battery') return false;
+    const stem = id.slice(7).replace(/_battery(_level)?$/, '');
+    const pct = parseFloat(s.state);
+    return !isNaN(pct) && pct < 20 && watched.some((w) => w.indexOf(stem) === 0);
+  }).map((id) => ({ name: name(id).replace(/\s*battery( level)?$/i, ''), pct: Math.round(parseFloat(by[id].state)) }));
+  const v = al.leak && al.leak.valve && by[al.leak.valve];
+  return {
+    leaksOffline: leaks.filter(off).map(name), leakTotal: leaks.length,
+    smokeOffline: smoke.filter(off).map(name), smokeTotal: smoke.length,
+    // A valve.* reports open/closed; a switch.* standing in for one is on while the water is on.
+    valveClosed: v ? (v.state === 'closed' || v.state === 'off') : null,
+    lowBattery,
   };
 }
 
@@ -527,6 +574,12 @@ async function api(req, env, url) {
     return json({ ok: true });
   }
   if (p === '/bins/out' && m === 'POST') return setBinsOut(env, await body(req));
+  if (p === '/frames' && m === 'POST') return frameBeat(env, await body(req));
+  if (p === '/frames' && m === 'GET') return json(await listFrames(env));
+  if ((r = /^\/frames\/([a-z0-9]{6,40})$/.exec(p)) && m === 'DELETE') {
+    await env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('frame:' + r[1]).run();
+    return json({ ok: true });
+  }
   if (p === '/groceries' && m === 'POST') return putGrocery(env, await body(req));
   if (p === '/groceries/clear' && m === 'POST') return clearGroceries(env, await body(req));
 

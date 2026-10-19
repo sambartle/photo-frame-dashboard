@@ -15,6 +15,8 @@ import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
 import android.net.http.SslError;
+import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -27,6 +29,7 @@ import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -148,6 +151,47 @@ public class MainActivity extends Activity {
     }
   };
 
+  /**
+   * What the dashboard page can ask of the kiosk, as window.HomeHQKiosk. Any page shown here can
+   * call it, so it only dims the backlight and reports harmless details: no settings, no files.
+   */
+  class Bridge {
+    /** Backlight off (the screen still takes taps) while nobody is home, or back to normal. */
+    @JavascriptInterface
+    public void setScreenOff(final boolean off) {
+      runOnUiThread(() -> MainActivity.this.setScreenOff(off));
+    }
+
+    /** Kiosk version, device and Wi-Fi signal (dBm), as JSON, for the frame health list. */
+    @JavascriptInterface
+    public String info() {
+      Integer rssi = null;
+      try {
+        WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        // Not getNetworkId(): Android 10 hides it (-1) from apps without location permission.
+        // getRssi() is -127 when there's no connection.
+        int r = wifi != null && wifi.getConnectionInfo() != null ? wifi.getConnectionInfo().getRssi() : -127;
+        if (r > -127 && r < 0) rssi = r;
+      } catch (RuntimeException e) {
+        Log.w(TAG, "Wi-Fi signal unavailable", e);
+      }
+      String version = "";
+      try {
+        version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+      } catch (PackageManager.NameNotFoundException e) {
+        // can't happen for our own package
+      }
+      return "{\"kiosk\":\"" + version + "\",\"model\":\"" + Build.MODEL.replace("\"", "") + "\",\"android\":\""
+          + Build.VERSION.RELEASE + "\",\"rssi\":" + rssi + "}";
+    }
+  }
+
+  private void setScreenOff(boolean off) {
+    WindowManager.LayoutParams lp = getWindow().getAttributes();
+    lp.screenBrightness = off ? 0f : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+    getWindow().setAttributes(lp);
+  }
+
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
@@ -163,6 +207,7 @@ public class MainActivity extends Activity {
     s.setDomStorageEnabled(true);
     s.setUseWideViewPort(true);
     s.setMediaPlaybackRequiresUserGesture(false);
+    web.addJavascriptInterface(new Bridge(), "HomeHQKiosk");
     // Keep navigation inside the kiosk. When the kiosk starts at boot before Wi-Fi is up, the
     // first load fails and would stay on the error page, so retry failed main-frame loads.
     // The offline screen covers WebView's error page until a load succeeds.
@@ -174,6 +219,7 @@ public class MainActivity extends Activity {
 
       @Override
       public void onPageStarted(WebView view, String url, Bitmap icon) {
+        setScreenOff(false); // a new page starts lit, whatever the last one asked for
         pageFailed = false;
         mainUrl = url;
       }

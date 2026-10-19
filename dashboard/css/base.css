@@ -290,6 +290,10 @@ button.card:active, .h-hero:active, .h-photo:active { transform: scale(.985); }
 .demo-grid button:active, .demo-grid button.is-on { background: #fff; color: var(--ink); }
 .demo-note { font-size: 16px; color: rgba(255, 255, 255, .6); }
 .demo-test { display: flex; gap: 8px; margin-top: 10px; }
+.demo-frames { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.demo-frame { font-size: 16px; color: rgba(255, 255, 255, .7); }
+.demo-frame b { color: #fff; font-weight: 800; }
+.demo-frame.is-quiet, .demo-frame.is-quiet b { color: #FF8A80; }
 .demo-test select {
   flex: 1; min-width: 0; min-height: var(--tap); border-radius: 14px; padding: 0 16px; border: 0;
   background: rgba(255, 255, 255, .1); color: #fff; font: inherit; font-size: 18px; font-weight: 700;

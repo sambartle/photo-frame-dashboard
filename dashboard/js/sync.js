@@ -65,6 +65,7 @@
       D.photos = merge(D.photos, s.photos);
       D.hasHome = s.hasHome; D.scenes = s.scenes; D.cameras = s.cameras;
       D.bins = s.bins || null;
+      D.awayOffMinutes = s.awayOffMinutes || 0;
       var rail = $('.rail-item[data-go="control"]');
       if (rail) rail.hidden = !D.hasHome;
     },
@@ -91,6 +92,7 @@
       D.climate = h.climate; D.media = h.media; D.cameras = h.cameras; D.scenes = h.scenes;
       D.alertConfig = h.alertConfig;
       D.energy = h.energy || null;
+      D.checks = h.checks || null;
       h.presence.forEach(function (x) {
         var p = D.people.filter(function (q) { return q.id === x.id; })[0];
         if (p) { p.home = x.home; p.status = x.status; }

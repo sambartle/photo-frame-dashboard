@@ -289,9 +289,28 @@ seconds, so an alert can take up to 10 s to appear:
 spend, such as a smart meter's electricity and gas cost today. With `power` (W or kW now), the
 line switches to the current draw while it's above `high` watts (3000 by default).
 
+The Home card's second line is an **all clear**: it names the first thing that needs a look (a
+door unlocked, the garage open, the water main off, leak or smoke sensors that have stopped
+reporting, or a low battery on one of them) and reads "All clear" otherwise. Tap it for the list.
+A battery counts when Home Assistant has a `sensor.<name>_battery` whose `<name>` starts one of the
+alert entities (Zigbee sensors are usually named this way).
+
+`display.awayOffMinutes` (top level of `family.json`) turns the screen off once everyone Home
+Assistant can place has been away that long, and back on when someone comes home, taps it, or an
+alert fires. People whose state is unknown are left out. With kiosk 1.2 the backlight goes down
+too; Android keeps running so the frame can wake by itself.
+
 Press and hold the clock in the sidebar, or press **D**, for display controls. From there you can
-preview ambient and night modes, show each alert without touching the house, refresh data, and
-check what's connected.
+preview ambient, night and screen-off modes, show each alert without touching the house, refresh
+data, and check what's connected.
+
+**Frames** in the display controls lists every wall display that has checked in (each does every
+5 minutes): its dashboard and kiosk versions, Wi-Fi signal (kiosk 1.2) and when it was last seen.
+One quiet for 15 minutes turns red there and shows a warning on the phone page. A frame is named
+after its device model; add `&frame=Kitchen` to its address once to name it yourself.
+
+After a deploy, frames reload themselves within about six minutes, waiting until nobody has
+touched the screen for a minute.
 
 ## How it fits together
 

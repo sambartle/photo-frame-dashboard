@@ -15,7 +15,9 @@
     if (App.mode !== 'day') App.setMode('day');
     return el;
   }
+  var camTimer;
   function closeTakeover() {
+    clearInterval(camTimer);
     var el = $('#takeover');
     el.classList.remove('is-open');
     el.innerHTML = '';
@@ -48,6 +50,15 @@
     });
     clearTimeout(doorbellTimer);
     doorbellTimer = setTimeout(closeTakeover, 45000);
+    // Near-live: a fresh snapshot every 2 s, swapped in once loaded so the picture never blanks.
+    var img = el.querySelector('.tk-cam img');
+    clearInterval(camTimer);
+    if (img) camTimer = setInterval(function () {
+      if (!img.isConnected) return clearInterval(camTimer);
+      var next = new Image();
+      next.onload = function () { if (img.isConnected) img.src = next.src; };
+      next.src = App.cameraSrc(cfg.doorbellCamera);
+    }, 2000);
   };
 
   App.leak = function () {
@@ -126,10 +137,11 @@
     return '<div class="demo-panel">' +
       '<div class="demo-head"><div><div class="label label--light">Home HQ</div><h2 class="serif">Display controls</h2></div><button class="demo-x" data-demo-close>' + App.icon('x', 28) + '</button></div>' +
       '<div class="demo-sec"><div class="label label--light">Modes</div><div class="demo-grid">' +
-      '<button data-mode="ambient">Ambient</button><button data-mode="night">Night</button><button data-fastidle>' + (App.idle.home < 60 ? 'Idle: fast ✓' : 'Idle: fast') + '</button><button data-reload>Refresh data</button></div></div>' +
+      '<button data-mode="ambient">Ambient</button><button data-mode="night">Night</button><button data-mode="off">Screen off</button><button data-fastidle>' + (App.idle.home < 60 ? 'Idle: fast ✓' : 'Idle: fast') + '</button><button data-reload>Refresh data</button></div></div>' +
       (tests().length ? '<div class="demo-sec"><div class="label label--light">Test alerts (nothing is sent to the house)</div><div class="demo-test">' +
       '<select id="demoAlert" aria-label="Alert to test">' + tests().map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select>' +
       '<button data-test>Show</button></div></div>' : '') +
+      '<div class="demo-sec"><div class="label label--light">Frames</div><div class="demo-frames" id="demoFrames"><p class="demo-note">Checking…</p></div></div>' +
       '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p>' +
       '<p class="demo-note">Version ' + __APP_VERSION__ + '</p></div>' +
       '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–5</b> views</p>' +
@@ -150,10 +162,27 @@
     if (D.hasHome) bits.push(D.homeOnline ? 'HA connected' : 'HA offline' + (haErr ? ' (' + App.esc(haErr) + ')' : ''));
     return bits.join(' · ');
   }
+  // Every wall display that has checked in, newest software first; quiet for 15 min = a problem.
+  function wifi(dbm) { return dbm == null ? '' : dbm >= -60 ? 'Wi-Fi good' : dbm >= -72 ? 'Wi-Fi fair' : 'Wi-Fi weak'; }
+  function fillFrames() {
+    App.api('GET', '/frames').then(function (list) {
+      var box = $('#demoFrames');
+      if (!box) return;
+      var me = App.frameId ? App.frameId() : '';
+      box.innerHTML = list.length ? list.map(function (f) {
+        var mins = Math.round((Date.now() - f.seen) / 60000), quiet = mins >= 15;
+        var bits = [f.version ? 'v' + f.version : '', f.kiosk ? 'kiosk ' + f.kiosk : 'kiosk too old to report',
+          f.rssi != null ? wifi(f.rssi) + ' (' + f.rssi + ' dBm)' : '', mins < 1 ? 'just now' : mins < 120 ? mins + ' min ago' : Math.round(mins / 60) + ' h ago'];
+        return '<p class="demo-frame' + (quiet ? ' is-quiet' : '') + '"><b>' + App.esc(f.name) + (f.id === me ? ' (this one)' : '') + '</b> ' +
+          bits.filter(Boolean).map(App.esc).join(' · ') + '</p>';
+      }).join('') : '<p class="demo-note">No frames have checked in yet.</p>';
+    }).catch(function () {});
+  }
   App.openDemo = function () {
     var el = $('#demo');
     el.innerHTML = demoHTML();
     el.classList.add('is-open');
+    fillFrames();
   };
   function closeDemo() { $('#demo').classList.remove('is-open'); }
 
