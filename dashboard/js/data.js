@@ -4,13 +4,12 @@ window.DATA = {
   people: [], ALL: [],
   family: { id: 'family', name: 'Family', color: '#111111', rgb: '17 17 17', ink: '#FFFFFF' },
   events: [],
-  routines: [{ id: 'all', name: 'Today', range: 'All day', from: 0, to: 24 }],
-  chores: [], stars: {}, week: {},
   stores: [{ id: 'grocer', name: 'Groceries' }], catOrder: { all: ['Other'], grocer: ['Other'] },
   groceries: [], catalog: [], usuals: [],
   hasHome: false, homeOnline: false, homeError: null,
   rooms: [], devices: [], climate: null, media: null, cameras: [], scenes: [],
-  sensors: {}, alertConfig: {},
-  weather: null,
+  sensors: {}, alertConfig: {}, energy: null,
+  weather: null, warnings: [],
+  bins: null,
   photos: []
 };

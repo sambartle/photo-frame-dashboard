@@ -131,7 +131,7 @@
       '<button data-alert="doorbell">Doorbell</button><button data-alert="leak">Water leak</button><button data-alert="smoke">Smoke</button><button data-alert="garage">Garage open</button></div></div>' : '') +
       '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p>' +
       '<p class="demo-note">Version ' + __APP_VERSION__ + '</p></div>' +
-      '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–6</b> views</p>' +
+      '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–5</b> views</p>' +
       '</div>';
   }
   function status() {
@@ -184,8 +184,8 @@
       if (k === 'a') App.setMode('ambient');
       if (k === 'n') App.setMode('night');
       if (k === 'escape') { closeDemo(); App.closeSheet(); }
-      var views = ['home', 'calendar', 'tasks', 'shopping', 'photos', 'control'];
-      if (k >= '1' && k <= '6') App.go(views[+k - 1]);
+      var views = ['home', 'calendar', 'shopping', 'photos', 'control'];
+      if (k >= '1' && k <= '5') App.go(views[+k - 1]);
     });
   });
 })();

@@ -20,12 +20,39 @@
       '<span class="h-wx-temp num">' + w.temp + '°</span>' +
       '<span class="h-wx-meta"><b>' + w.label + '</b><span>H ' + w.hi + '°  L ' + w.lo + '°</span></span>' +
       '</div>' +
-      '<div class="h-wx-say"><b>' + w.summary + '.</b> ' + w.advice + '.</div>' +
+      (warning() || '<div class="h-wx-say"><b>' + w.summary + '.</b> ' + w.advice + '.</div>') +
       '<div class="h-wx-hours">' + hours.map(function (h) {
         var lift = tmax === tmin ? 0 : Math.round((h.t - tmin) / (tmax - tmin) * 8);
         return '<div class="h-hr' + (h.p >= 50 ? ' is-wet' : '') + '"><span class="h-hr-l">' + h.label + '</span>' +
           '<span class="h-hr-i" style="transform:translateY(' + -lift + 'px)">' + App.icon(h.c, 22) + '</span><b>' + h.t + '°</b></div>';
       }).join('') + '</div>';
+  }
+
+  // The most severe Met Office warning that hasn't ended, as a strip under the temperature.
+  function liveWarnings() {
+    var now = App.now();
+    return D.warnings.filter(function (x) { return new Date(x.to) > now; });
+  }
+  function warnWhen(x) {
+    var a = new Date(x.from), b = new Date(x.to), now = App.now();
+    var day = function (d) { return App.sameDay(d, now) ? '' : App.fmt.dayShort(d) + ' '; };
+    return a <= now ? 'Now until ' + day(b) + App.fmt.hour(b) : day(a) + App.fmt.hour(a) + ' – ' + day(b) + App.fmt.hour(b);
+  }
+  function warning() {
+    var x = liveWarnings()[0];
+    if (!x) return '';
+    return '<button class="h-wx-warn is-' + x.level + '" data-warn>' + App.icon('alert', 22) +
+      '<span><b>' + x.level[0].toUpperCase() + x.level.slice(1) + ' ' + App.esc(x.type) + ' warning</b> · ' + warnWhen(x) + '</span></button>';
+  }
+  function warningSheet() {
+    var list = liveWarnings();
+    if (!list.length) return;
+    App.sheet('<div class="sheet-pad wxs">' + list.map(function (x) {
+      return '<div class="wxs-item"><span class="wxs-tag is-' + x.level + '">' + App.esc(x.level) + ' · ' + App.esc(x.type) + '</span>' +
+        '<h2 class="serif">' + App.esc(x.type[0].toUpperCase() + x.type.slice(1)) + ' warning</h2>' +
+        '<div class="wxs-when num">' + warnWhen(x) + '</div>' +
+        '<p>Covers ' + App.esc(x.areas.join(', ')) + '. Details at metoffice.gov.uk.</p></div>';
+    }).join('') + '<div class="label">Met Office · ' + App.esc(list[0].region) + '</div></div>');
   }
 
   // Only people with a Home Assistant person entity; everyone else's whereabouts are unknown.
@@ -57,17 +84,31 @@
     var big = mins < 100
       ? '<div class="h-hero-count num">' + Math.round(mins) + '<small>min</small></div>'
       : '<div class="h-hero-count num">' + App.fmt.time(e.start, false) + '<small>' + App.fmt.ampm(e.start) + '</small></div>';
-    var leavePill = '';
+    var leavePill = '', tone = '', kicker = 'Next up';
     if (e.travel) {
-      leavePill = leave <= 0
-        ? '<span class="pill pill--alert"><i class="pulse"></i>Leave now</span>'
-        : '<span class="pill' + (leave <= 15 ? ' pill--soon' : '') + '">' + App.icon('car', 20) + 'Leave in ' + App.fmt.mins(leave) + '</span>';
+      // Within the hour the count is time to leave. Past leave-by, anyone on the event still at home
+      // (per Home Assistant) is running late; once they're all out, it's back to "starts in".
+      var tracked = e.people.map(App.person).filter(function (x) { return x.tracked; });
+      var stillHome = tracked.length ? tracked.some(function (x) { return x.home; }) : true;
+      if (leave > 0 && leave < 60) {
+        kicker = 'Leave for';
+        big = '<div class="h-hero-count num">' + Math.ceil(leave) + '<small>min to leave</small></div>';
+      } else if (leave <= 0 && stillHome) {
+        var late = Math.floor(-leave);
+        tone = late < 3 ? ' is-go' : ' is-late';
+        kicker = late < 3 ? 'Leave now' : 'Running late';
+        big = late < 3
+          ? '<div class="h-hero-count num">' + App.icon('car', 110) + '<small>leave now</small></div>'
+          : '<div class="h-hero-count num">+' + late + '<small>min late</small></div>';
+      } else if (leave > 0) {
+        leavePill = '<span class="pill">' + App.icon('car', 20) + 'Leave by ' + App.fmt.time(App.leaveBy(e)) + '</span>';
+      }
     }
-    return '<button class="h-hero" style="' + App.pstyle(p) + '" data-ev="' + e.id + '">' +
+    return '<button class="h-hero' + tone + '" style="' + App.pstyle(p) + '" data-ev="' + e.id + '">' +
       '<div class="h-hero-main">' +
-      '  <div class="label label--on">Next up · ' + App.esc(whoText) + '</div>' +
+      '  <div class="label label--on">' + kicker + ' · ' + App.esc(whoText) + '</div>' +
       '  <div class="h-hero-title serif">' + App.esc(e.title) + '</div>' +
-      '  <div class="h-hero-meta">' + App.fmt.range(e.start, e.end) + (e.loc ? ' · ' + App.esc(e.loc) : '') + '</div>' +
+      '  <div class="h-hero-meta">' + App.fmt.range(e.start, e.end) + (e.travel ? ' · ' + e.travel + ' min to get there' : '') + (e.loc ? ' · ' + App.esc(e.loc) : '') + '</div>' +
       '  <div class="h-hero-foot">' + (e.people.length > 1 ? App.dots(e.people, 22) : '') + leavePill + '</div>' +
       '</div>' + big + '</button>';
   }
@@ -91,25 +132,61 @@
     }).join('');
   }
 
-  function ring(done, total, size) {
-    var r = size / 2 - 5, c = 2 * Math.PI * r, f = total ? done / total : 0;
-    return '<svg class="ring" width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">' +
-      '<circle cx="' + size / 2 + '" cy="' + size / 2 + '" r="' + r + '" class="ring-bg"/>' +
-      '<circle cx="' + size / 2 + '" cy="' + size / 2 + '" r="' + r + '" class="ring-fg" stroke-dasharray="' + (c * f) + ' ' + c + '" transform="rotate(-90 ' + size / 2 + ' ' + size / 2 + ')"/></svg>';
+  // ------------------------------------------------------------ bins
+  App.binIcon = function (color, size) {
+    return '<svg class="bin" width="' + size + '" height="' + Math.round(size * 1.17) + '" viewBox="0 0 24 28" aria-hidden="true">' +
+      '<rect x="3" y="6" width="18" height="21" rx="2" fill="' + color + '"/><rect x="1.5" y="2.5" width="21" height="4" rx="1" fill="' + color + '"/></svg>';
+  };
+  function binType(id) { return (D.bins.types || {})[id] || { name: id, color: '#7A756B' }; }
+  function binNames(c) { return c.bins.map(function (b) { return binType(b).name; }).join(' + '); }
+  function ymdDate(s) { var a = s.split('-'); return new Date(+a[0], +a[1] - 1, +a[2]); }
+  // The next collection still to come: today's counts until 9 AM, then it's the one after.
+  function nextBins() {
+    var now = App.now();
+    return D.bins && D.bins.next.filter(function (c) { return !(App.sameDay(ymdDate(c.date), now) && now.getHours() >= 9); })[0] || null;
   }
-  App.ring = ring;
-
-  function chores() {
-    var r = App.currentRoutine();
-    var who = D.people.map(function (p) { return p.id; }).concat(['any']);
-    return '<div class="label">Chores · ' + r.name + '</div><div class="h-rings">' + who.map(function (id) {
-      var list = D.chores.filter(function (c) { return c.r === r.id && c.who === id; });
-      if (!list.length) return '';
-      var done = list.filter(function (c) { return c.done; }).length;
-      var p = App.person(id);
-      return '<div class="h-ring' + (done === list.length ? ' is-done' : '') + '" style="' + App.pstyle(p) + '">' + ring(done, list.length, 64) +
-        '<b class="num">' + (done === list.length ? '✓' : done + '/' + list.length) + '</b><span>' + (id === 'any' ? 'Anyone' : p.name) + '</span></div>';
-    }).join('') + '</div>';
+  // "Due" from 4 PM the day before until 9 AM on the day: that's when bins go out.
+  App.binsDue = function () {
+    var c = nextBins();
+    if (!c) return null;
+    var day = ymdDate(c.date), now = App.now(), h = now.getHours();
+    var eve = App.sameDay(App.addDays(day, -1), now) && h >= 16, morning = App.sameDay(day, now) && h < 9;
+    if (!eve && !morning) return null;
+    return { c: c, out: !!(D.bins.out && D.bins.out.date === c.date), tonight: eve };
+  };
+  function bins() {
+    var c = nextBins();
+    if (!c) return '';
+    var due = App.binsDue(), day = ymdDate(c.date), today = App.dayStart(App.now());
+    var days = Math.round((day - today) / 864e5);
+    var icons = c.bins.map(function (b) { return App.binIcon(binType(b).color, 30); }).join('');
+    var what = c.bins.map(function (b) { return binType(b).what || ''; }).filter(Boolean).join(' · ');
+    var when = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : App.fmt.day(day) + ' ' + day.getDate() + ' ' + App.fmt.monthShort(day);
+    var right = due
+      ? (due.out ? '<span class="h-bins-go is-done">' + App.icon('check', 22) + 'Out</span>' : '<span class="h-bins-go">' + (due.tonight ? 'Put out tonight' : 'Put out now') + '</span>')
+      : '<span class="h-bins-in num">' + (days === 0 ? 'today' : days === 1 ? 'tomorrow' : 'in ' + days + ' days') + '</span>';
+    return '<div class="h-bins-icons">' + icons + '</div>' +
+      '<div class="h-bins-text"><span class="label' + (due && !due.out ? ' label--light' : '') + '">Bins · ' + when + '</span><b>' + App.esc(binNames(c)) + '</b>' +
+      (what ? '<small>' + App.esc(what) + '</small>' : '') + '</div>' + right;
+  }
+  function binsSheet() {
+    App.sheet('<div class="sheet-pad bns"><div class="label">Next collections</div>' + D.bins.next.map(function (c) {
+      var d = ymdDate(c.date);
+      return '<div class="bns-row">' + c.bins.map(function (b) { return App.binIcon(binType(b).color, 34); }).join('') +
+        '<div><b>' + App.fmt.day(d) + ' ' + d.getDate() + ' ' + App.fmt.month(d) + '</b><span>' +
+        App.esc(c.bins.map(function (b) { var t = binType(b); return t.name + (t.what ? ' (' + t.what.toLowerCase() + ')' : ''); }).join(', ')) + '</span></div></div>';
+    }).join('') + '</div>');
+  }
+  App.setBinsOut = function (c, out) {
+    D.bins.out = out ? { date: c.date, at: Date.now() } : null;
+    App.emit('data');
+    App.write('state', 'POST', '/bins/out', { date: c.date, out: out }).then(function (b) { D.bins = b; App.emit('data'); });
+  };
+  function binsTap() {
+    var due = App.binsDue();
+    if (!due) return binsSheet();
+    App.setBinsOut(due.c, !due.out);
+    if (!due.out) App.toast('Bins out · thanks', { icon: 'check', ms: 2500 });
   }
 
   function shopping() {
@@ -141,7 +218,16 @@
     return '<div class="label">Home</div>' +
       '<div class="h-st-row">' + App.icon('bulb', 24) + '<b class="num">' + lights + '</b><span>lights on</span></div>' +
       '<div class="h-st-row' + (secure ? '' : ' is-warn') + '">' + App.icon(secure ? 'lock' : 'unlock', 24) + '<span>' + secText + '</span></div>' +
-      (D.climate && D.climate.current != null ? '<div class="h-st-row">' + App.icon('thermo', 24) + '<b class="num">' + D.climate.current + '°</b><span>inside</span></div>' : '');
+      (D.climate && D.climate.current != null ? '<div class="h-st-row">' + App.icon('thermo', 24) + '<b class="num">' + D.climate.current + '°</b><span>inside</span></div>' : '') +
+      energy();
+  }
+  // Spend today, or the draw right now when it's high (kettle, oven and washer at once).
+  function energy() {
+    var E = D.energy;
+    if (!E) return '';
+    if (E.high) return '<div class="h-st-row is-warn">' + App.icon('bolt', 24) + '<b class="num">' + (E.watts / 1000).toFixed(1) + ' kW</b><span>now</span></div>';
+    if (E.cost == null) return E.watts == null ? '' : '<div class="h-st-row">' + App.icon('bolt', 24) + '<b class="num">' + (E.watts >= 1000 ? (E.watts / 1000).toFixed(1) + ' kW' : Math.round(E.watts) + ' W') + '</b><span>now</span></div>';
+    return '<div class="h-st-row">' + App.icon('bolt', 24) + '<b class="num">' + E.currency + E.cost.toFixed(2) + '</b><span>today</span></div>';
   }
 
   function paint() {
@@ -151,8 +237,12 @@
     el.querySelector('.h-presence').innerHTML = presence();
     el.querySelector('.h-hero-slot').innerHTML = hero();
     el.querySelector('.h-lanes').innerHTML = lanes();
-    el.querySelector('.h-chores').innerHTML = chores();
     el.querySelector('.h-shop').innerHTML = shopping();
+    var b = el.querySelector('.h-bins'), due = App.binsDue();
+    b.innerHTML = bins();
+    b.hidden = !b.innerHTML;
+    b.classList.toggle('is-due', !!due && !due.out);
+    el.querySelector('.h-side').classList.toggle('has-bins', !b.hidden);
     var st = el.querySelector('.h-status');
     st.innerHTML = status();
     if (D.hasHome) st.setAttribute('data-go', 'control'); else st.removeAttribute('data-go');
@@ -174,12 +264,14 @@
           '<div class="h-main"><div class="h-hero-slot"></div><div class="h-lanes" ></div></div>' +
           '<div class="h-side">' +
           '  <button class="h-photo" data-go="photos"><div class="h-photo-stage"></div><div class="h-photo-cap"></div></button>' +
-          '  <button class="h-chores card" data-go="tasks"></button>' +
+          '  <button class="h-bins card" data-bins hidden></button>' +
           '  <div class="h-duo"><button class="h-shop card" data-go="shopping"></button><button class="h-status card"></button></div>' +
           '</div></div>';
         el.addEventListener('click', function (e) {
           var ev = e.target.closest('[data-ev]');
           if (ev) { App.eventSheet(App.findEvent(ev.dataset.ev)); return; }
+          if (e.target.closest('[data-warn]')) { warningSheet(); return; }
+          if (e.target.closest('[data-bins]')) { binsTap(); return; }
           var g = e.target.closest('[data-go]');
           if (g) App.go(g.dataset.go);
         });
@@ -196,8 +288,25 @@
     if (!V.el || !V.el.firstChild) return;
     V.el.querySelector('.h-clock').innerHTML = clock();
     V.el.querySelector('.h-hero-slot').innerHTML = hero();
-    if (n.getMinutes() === 0) { V.el.querySelector('.h-weather').innerHTML = weather(); V.el.querySelector('.h-lanes').innerHTML = lanes(); }
+    // Every half hour everything (weather, bins due at 4 PM and 9 AM, warnings starting or ending).
+    if (n.getMinutes() % 30 === 0) paint();
     else if (n.getMinutes() % 5 === 0) V.el.querySelector('.h-lanes').innerHTML = lanes(); // drop finished events
   });
   App.on('data', function () { if (App.current === 'home') paint(); });
+
+  // The night before collection: a banner on every view at 6 PM, again at 8:30 PM if nobody has
+  // said the bins are out. It goes away by itself once they are.
+  var binBanner = null;
+  App.on('minute', function (n) {
+    var due = App.binsDue(), t = n.getHours() * 60 + n.getMinutes();
+    if (binBanner && (!due || due.out)) { binBanner(); binBanner = null; }
+    if (!due || due.out || !due.tonight || (t !== 18 * 60 && t !== 20 * 60 + 30)) return;
+    if (binBanner) binBanner();
+    var names = due.c.bins.map(function (b) { return ((D.bins.types || {})[b] || { name: b }).name; }).join(' and ');
+    binBanner = App.banner({
+      tone: 'ink', icon: 'bell', title: App.esc(names) + (due.c.bins.length > 1 ? ' bins' : ' bin') + ' out tonight',
+      sub: 'Collected tomorrow morning', action: 'They’re out', dismiss: 'Later',
+      onAction: function () { binBanner = null; App.setBinsOut(due.c, true); }
+    });
+  });
 })();

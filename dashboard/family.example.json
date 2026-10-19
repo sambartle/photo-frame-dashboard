@@ -3,28 +3,28 @@
 
   "timezone": "Europe/London",
   "location": { "lat": 51.5072, "lon": -0.1276, "units": "celsius" },
+  "warnings": { "region": "se", "areas": ["Hampshire", "West Sussex"] },
+
+  "bins": {
+    "types": {
+      "general": { "name": "Black", "what": "General waste", "color": "#222222" },
+      "recycling": { "name": "Blue", "what": "Cans, glass and plastic", "color": "#1F6FEB" }
+    },
+    "every": [
+      { "bin": "general", "from": "2026-01-06", "weeks": 2 },
+      { "bin": "recycling", "from": "2026-01-13", "weeks": 2 }
+    ],
+    "moved": { "2026-12-22": "2026-12-19", "2026-12-29": null }
+  },
 
   "people": [
     { "id": "sam", "name": "Sam", "color": "#2D5BFF", "ha": "person.sam" },
     { "id": "alex", "name": "Alex", "color": "#E4007C", "ha": "person.alex" },
-    { "id": "maya", "name": "Maya", "color": "#00A36C", "kid": true },
-    { "id": "otto", "name": "Otto", "color": "#FFB000", "kid": true }
+    { "id": "maya", "name": "Maya", "color": "#00A36C" },
+    { "id": "otto", "name": "Otto", "color": "#FFB000" }
   ],
 
   "_calendars": "Calendar links are private: put them in calendars.json (see calendars.example.json), which is uploaded as the CALENDARS secret, not here.",
-  "routines": [
-    { "id": "morning", "name": "Morning", "range": "6 – 11 AM", "from": 0, "to": 11 },
-    { "id": "after", "name": "After school", "range": "11 AM – 5 PM", "from": 11, "to": 17 },
-    { "id": "evening", "name": "Evening", "range": "5 – 10 PM", "from": 17, "to": 24 }
-  ],
-  "chores": [
-    { "r": "morning", "who": "maya", "title": "Make bed", "emoji": "🛏️", "stars": 1 },
-    { "r": "morning", "who": "otto", "title": "Brush teeth", "emoji": "🪥", "stars": 1 },
-    { "r": "after", "who": "maya", "title": "Homework", "emoji": "📚", "stars": 2, "days": ["mon", "tue", "wed", "thu"] },
-    { "r": "after", "who": "any", "title": "Empty dishwasher", "emoji": "🍽️", "stars": 2 },
-    { "r": "evening", "who": "sam", "title": "Lock up", "emoji": "🔐" },
-    { "r": "evening", "who": "any", "title": "Bins to curb", "emoji": "🗑️", "stars": 2, "days": ["tue"] }
-  ],
 
   "shopping": {
     "stores": [{ "id": "grocer", "name": "Tesco" }, { "id": "bulk", "name": "Costco" }],
@@ -79,6 +79,7 @@
       "leak": { "entities": ["binary_sensor.laundry_leak"], "valve": "valve.water_main" },
       "smoke": { "entities": ["binary_sensor.hallway_smoke", "binary_sensor.landing_co"] },
       "garageOpenMinutes": 15
-    }
+    },
+    "energy": { "cost": ["sensor.electricity_cost_today", "sensor.gas_cost_today"], "power": "sensor.house_power", "high": 3000 }
   }
 }

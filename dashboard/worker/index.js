@@ -1,5 +1,5 @@
 // Home HQ backend: serves the built dashboard and a small JSON API.
-//   /api/state     lists (chores, shopping, photos) + family config        D1
+//   /api/state     lists (shopping, photos) + family config                D1
 //   /api/calendar  Google Calendar ICS feeds + events added on the frame    ICS → D1 cache
 //   /api/weather   Open-Meteo forecast                                      → D1 cache
 //   /api/home      Home Assistant states, controls and camera snapshots     HA REST API
@@ -25,13 +25,8 @@ const CFG = (function () {
   const people = (RAW.people || []).map((p) => {
     const [r, g, b] = hexRgb(p.color || '#888888');
     const light = (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62;
-    return { id: p.id, name: p.name, color: p.color, rgb: r + ' ' + g + ' ' + b, ink: light ? '#111111' : '#FFFFFF', kid: !!p.kid, ha: p.ha };
+    return { id: p.id, name: p.name, color: p.color, rgb: r + ' ' + g + ' ' + b, ink: light ? '#111111' : '#FFFFFF', ha: p.ha };
   });
-  const chores = (RAW.chores || []).map((c) => ({
-    id: c.id || slug(c.r + '-' + c.who + '-' + c.title),
-    r: c.r, who: c.who, title: c.title, emoji: c.emoji || '✅', stars: c.stars || 0,
-    days: c.days ? c.days.map((d) => String(d).slice(0, 3).toLowerCase()) : null,
-  }));
   const shop = RAW.shopping || {};
   const cats = shop.categories || ['Other'];
   const stores = shop.stores && shop.stores.length ? shop.stores : [{ id: 'grocer', name: 'Groceries' }];
@@ -48,8 +43,10 @@ const CFG = (function () {
     (r.devices || []).forEach((d) => devices.push({ entity: d.entity, name: d.name, room: id, garage: !!d.garage }));
   });
   const alerts = (home && home.alerts) || {};
+  const bins = RAW.bins && RAW.bins.every && RAW.bins.every.length ? RAW.bins : null;
+  const warnings = RAW.warnings && RAW.warnings.region ? RAW.warnings : null;
   return {
-    tz, people, chores, routines: RAW.routines || [],
+    tz, people, bins, warnings,
     location: RAW.location, stores, catOrder, catalog, usuals: shop.usuals || [],
     home, rooms, devices,
     scenes: home ? (home.scenes || []).map((s) => ({ id: s.entity, name: s.name, icon: s.icon || 'bolt' })) : [],
@@ -72,11 +69,6 @@ function localDay(ms) {
     .formatToParts(new Date(ms == null ? Date.now() : ms));
   const get = (t) => parts.find((p) => p.type === t).value;
   return { ymd: get('year') + '-' + get('month') + '-' + get('day'), dow: WEEKDAYS.indexOf(get('weekday').slice(0, 3).toLowerCase()) };
-}
-function addYmd(ymd, n) {
-  const d = new Date(ymd + 'T12:00:00Z');
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
 }
 
 async function cached(env, key, ttlMs, compute) {
@@ -105,69 +97,58 @@ function cookieKey(req) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-// ------------------------------------------------------------------ state (chores, shopping, photos)
-async function choreState(env) {
-  const today = localDay();
-  const todays = CFG.chores.filter((c) => !c.days || c.days.indexOf(WEEKDAYS[today.dow]) > -1);
-  const monday = addYmd(today.ymd, -((today.dow + 6) % 7));
-  const [logs, totals] = await Promise.all([
-    env.DB.prepare('SELECT chore_id, day, done_by FROM chore_log WHERE day >= ?').bind(monday).all(),
-    env.DB.prepare('SELECT earner, SUM(stars) AS n FROM chore_log WHERE earner IS NOT NULL GROUP BY earner').all(),
-  ]);
-  const doneOn = {};
-  logs.results.forEach((l) => { doneOn[l.chore_id + '|' + l.day] = l.done_by || true; });
-
-  const chores = todays.map((c) => {
-    const d = doneOn[c.id + '|' + today.ymd];
-    return { id: c.id, r: c.r, who: c.who, title: c.title, emoji: c.emoji, stars: c.stars, done: !!d, doneBy: typeof d === 'string' ? d : undefined };
+// ------------------------------------------------------------------ bins
+// Collection dates come from the council's rotation in family.json ("every"), with bank-holiday
+// changes listed in "moved" (usual date -> actual date, or null when it is skipped).
+function addYmd(ymd, n) {
+  const d = new Date(ymd + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+async function binsState(env) {
+  const B = CFG.bins;
+  if (!B) return null;
+  const today = localDay().ymd, until = addYmd(today, 42), moved = B.moved || {}, by = {};
+  B.every.forEach((x) => {
+    const step = 7 * (x.weeks || 1);
+    let d = x.from;
+    if (d < today) d = addYmd(d, Math.ceil((Date.parse(today) - Date.parse(d)) / 864e5 / step) * step - step);
+    for (; d <= until; d = addYmd(d, step)) {
+      const actual = Object.prototype.hasOwnProperty.call(moved, d) ? moved[d] : d;
+      if (!actual || actual < today) continue;
+      (by[actual] = by[actual] || []).push(x.bin);
+    }
   });
-  const stars = {}, week = {};
-  CFG.people.filter((p) => p.kid).forEach((p) => {
-    stars[p.id] = 0;
-    week[p.id] = [0, 1, 2, 3, 4, 5, 6].map((i) => {
-      const day = addYmd(monday, i);
-      if (day > today.ymd) return null;
-      const dow = (i + 1) % 7;
-      const mine = CFG.chores.filter((c) => c.who === p.id && (!c.days || c.days.indexOf(WEEKDAYS[dow]) > -1));
-      return mine.length && mine.every((c) => doneOn[c.id + '|' + day]) ? 1 : 0;
-    });
-  });
-  totals.results.forEach((t) => { if (stars[t.earner] != null) stars[t.earner] = t.n; });
-  return { chores, stars, week, today: today.ymd };
+  const next = Object.keys(by).sort().slice(0, 4).map((date) => ({ date, bins: by[date] }));
+  const out = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('bins-out').first();
+  return { types: B.types || {}, next, out: out ? JSON.parse(out.value) : null };
+}
+// "They're out" for one collection date; out: false takes it back.
+async function setBinsOut(env, b) {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(b.date) ? b.date : null;
+  if (!date) return bad('date required');
+  if (b.out === false) await env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('bins-out').run();
+  else await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+    .bind('bins-out', JSON.stringify({ date, at: Date.now() }), Date.now() + 7 * 864e5).run();
+  return json(await binsState(env));
 }
 
+// ------------------------------------------------------------------ state (shopping, photos, bins)
 async function getState(env) {
-  const [ch, groceries, photos] = await Promise.all([
-    choreState(env),
+  const [groceries, photos, bins] = await Promise.all([
     env.DB.prepare('SELECT id, name, cat, qty, store, note, done FROM groceries WHERE cleared = 0 ORDER BY updated_at').all(),
     env.DB.prepare('SELECT id, o, date, place, from_id, fav FROM photos ORDER BY date DESC').all(),
+    binsState(env),
   ]);
   return {
-    people: CFG.people.map((p) => ({ id: p.id, name: p.name, color: p.color, rgb: p.rgb, ink: p.ink, kid: p.kid, tracked: !!(p.ha && CFG.home) })),
-    routines: CFG.routines,
-    chores: ch.chores, stars: ch.stars, week: ch.week, today: ch.today,
+    people: CFG.people.map((p) => ({ id: p.id, name: p.name, color: p.color, rgb: p.rgb, ink: p.ink, tracked: !!(p.ha && CFG.home) })),
     stores: CFG.stores, catOrder: CFG.catOrder, catalog: CFG.catalog, usuals: CFG.usuals,
     groceries: groceries.results.map((g) => Object.assign(g, { done: !!g.done })),
     photos: photos.results.map((p) => ({ id: p.id, o: p.o, date: p.date, place: p.place, from: p.from_id, fav: !!p.fav, tag: p.date })),
     hasHome: !!CFG.home,
     scenes: CFG.scenes, cameras: CFG.cameras,
+    bins,
   };
-}
-
-async function setChore(env, id, b) {
-  const c = CFG.chores.find((x) => x.id === id);
-  if (!c) return bad('unknown chore', 404);
-  const day = localDay().ymd;
-  if (!b.done) {
-    await env.DB.prepare('DELETE FROM chore_log WHERE chore_id = ? AND day = ?').bind(id, day).run();
-  } else {
-    const by = CFG.people.find((p) => p.id === b.doneBy) ? b.doneBy : null;
-    const kid = (pid) => CFG.people.some((p) => p.id === pid && p.kid);
-    const earner = kid(c.who) ? c.who : (by && kid(by) ? by : null);
-    await env.DB.prepare('INSERT OR REPLACE INTO chore_log (chore_id, day, done_by, earner, stars, at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(id, day, by, earner, earner ? c.stars : 0, Date.now()).run();
-  }
-  return json(await choreState(env));
 }
 
 async function putGrocery(env, b) {
@@ -291,6 +272,13 @@ function wxCond(code, isDay) {
   return 'rain';
 }
 async function getWeather(env) {
+  const [w, warnings] = await Promise.all([
+    forecast(env).catch((err) => ({ error: err.message })),
+    getWarnings(env).catch(() => []),
+  ]);
+  return Object.assign({}, w, { warnings });
+}
+async function forecast(env) {
   const loc = CFG.location;
   if (!loc) return { none: true };
   return cached(env, 'weather', 15 * 60e3, async () => {
@@ -315,6 +303,41 @@ async function getWeather(env) {
       feels: Math.round(w.current.apparent_temperature), humidity: w.current.relative_humidity_2m,
       wind: Math.round(w.current.wind_speed_10m), now: Math.round(w.current.temperature_2m),
     };
+  });
+}
+
+// Met Office warnings for one region (family.json "warnings": { "region": "yh", "areas": [...] }),
+// kept to those naming one of the areas. Times are UK local, as 'YYYY-MM-DDTHH:MM'.
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+function xmlText(s) {
+  return s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').trim();
+}
+function warnTime(hhmm, day, mon, year) {
+  return year + '-' + String(MONTHS.indexOf(mon.toLowerCase()) + 1).padStart(2, '0') + '-' + day.padStart(2, '0') + 'T' + hhmm.slice(0, 2) + ':' + hhmm.slice(2);
+}
+async function getWarnings(env) {
+  const W = CFG.warnings;
+  if (!W) return [];
+  return cached(env, 'warnings', 10 * 60e3, async () => {
+    const res = await fetch('https://www.metoffice.gov.uk/public/data/PWSCache/WarningsRSS/Region/' + encodeURIComponent(W.region));
+    if (!res.ok) throw new Error('warnings: HTTP ' + res.status);
+    const xml = await res.text(), want = (W.areas || []).map((a) => a.toLowerCase()), seen = {}, out = [];
+    (xml.match(/<item>[\s\S]*?<\/item>/g) || []).forEach((item) => {
+      const tag = (t) => { const m = new RegExp('<' + t + '[^>]*>([\\s\\S]*?)</' + t + '>').exec(item); return m ? xmlText(m[1]) : ''; };
+      const d = /^(Yellow|Amber|Red) warning of (.+?) affecting (.+?):\s*(.*?)\s+valid from (\d{4}) \w{3} (\d{1,2}) (\w{3}) to (\d{4}) \w{3} (\d{1,2}) (\w{3})/i.exec(tag('description'));
+      if (!d) return;
+      const areas = d[4].split(/,\s*/), mine = want.length ? areas.filter((a) => want.indexOf(a.toLowerCase()) > -1) : areas;
+      if (!mine.length) return;
+      const link = tag('link'), y = +((/date=(\d{4})/.exec(link) || [])[1] || new Date().getUTCFullYear());
+      const from = warnTime(d[5], d[6], d[7], y);
+      const to = warnTime(d[8], d[9], d[10], MONTHS.indexOf(d[10].toLowerCase()) < MONTHS.indexOf(d[7].toLowerCase()) ? y + 1 : y);
+      const level = d[1].toLowerCase(), type = d[2].toLowerCase(), key = level + type + from + to;
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push({ level, type, region: d[3], areas: mine, from, to, link });
+    });
+    const rank = { red: 0, amber: 1, yellow: 2 };
+    return out.sort((a, b) => rank[a.level] - rank[b.level] || (a.from < b.from ? -1 : 1));
   });
 }
 
@@ -388,11 +411,27 @@ async function getHome(env) {
       }),
       garageOpenSince: garage && garage.state !== 'closed' && by[garage.id] ? by[garage.id].last_changed : null,
     },
+    energy: energyView(H.energy, by),
     alertConfig: {
       doorbell: !!al.doorbell, doorbellCamera: al.doorbell && al.doorbell.camera || null, doorbellLock: al.doorbell && al.doorbell.lock || null,
       waterValve: !!(al.leak && al.leak.valve), smoke: !!(al.smoke && al.smoke.entities && al.smoke.entities.length),
       garageOpenMinutes: al.garageOpenMinutes || 0,
     },
+  };
+}
+
+// family.json home.energy: { "cost": "sensor.…" or a list to add up (money today, e.g. electricity
+// and gas), "power": "sensor.…" (W or kW now), "high": 3000 (watts that count as a lot) }.
+// Either can be left out.
+function energyView(E, by) {
+  if (!E) return null;
+  const num = (id) => { const s = id && by[id]; const n = s ? parseFloat(s.state) : NaN; return isNaN(n) ? null : { n, unit: (s.attributes || {}).unit_of_measurement || '' }; };
+  const costs = [].concat(E.cost || []).map(num).filter(Boolean), power = num(E.power);
+  const cost = costs.length ? { n: costs.reduce((t, c) => t + c.n, 0), unit: costs[0].unit } : null;
+  const watts = power ? (/^kw$/i.test(power.unit) ? power.n * 1000 : power.n) : null;
+  return {
+    cost: cost ? cost.n : null, currency: cost ? ({ GBP: '£', EUR: '€', USD: '$' }[cost.unit] || cost.unit || '£') : null,
+    watts, high: watts != null && watts >= (E.high || 3000),
   };
 }
 
@@ -487,7 +526,7 @@ async function api(req, env, url) {
     await env.DB.prepare('DELETE FROM events WHERE id = ?').bind(r[1]).run();
     return json({ ok: true });
   }
-  if ((r = /^\/chores\/([\w-]+)$/.exec(p)) && m === 'POST') return setChore(env, r[1], await body(req));
+  if (p === '/bins/out' && m === 'POST') return setBinsOut(env, await body(req));
   if (p === '/groceries' && m === 'POST') return putGrocery(env, await body(req));
   if (p === '/groceries/clear' && m === 'POST') return clearGroceries(env, await body(req));
 

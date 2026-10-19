@@ -1,8 +1,8 @@
-// Phone page: the shopping list and today's chores, live from the same API as the wall dashboard.
+// Phone page: the shopping list, live from the same API as the wall dashboard.
 // Changes show on screen at once and save in the background; a poll that started before the last
 // save is dropped, so a tick never flickers back.
 var $ = function (s) { return document.querySelector(s); };
-var S = { tab: 'shopping', store: 'all', routine: null, data: null, wrote: 0, lastText: '' };
+var S = { tab: 'shopping', store: 'all', data: null, wrote: 0, lastText: '' };
 var POLL_MS = 20000;
 
 // ------------------------------------------------------------ API
@@ -151,78 +151,12 @@ function onShopClick(e) {
   }
 }
 
-// ------------------------------------------------------------ chores
-function person(id) {
-  if (id === 'any') return { name: 'Anyone', color: '#111111', rgb: '17 17 17', ink: '#FFFFFF' };
-  return S.data.people.filter(function (p) { return p.id === id; })[0] || { name: id, color: '#7A756B', rgb: '122 117 107', ink: '#FFFFFF' };
-}
-function pstyle(p) { return '--c:' + p.color + ';--c-rgb:' + p.rgb + ';--c-ink:' + p.ink; }
-function currentRoutine() {
-  var h = new Date().getHours(), r = S.data.routines;
-  return (r.filter(function (x) { return h >= x.from && h < x.to; })[0] || r[r.length - 1]).id;
-}
-
-function renderChores() {
-  if (!S.data) return;
-  var now = currentRoutine(), sel = S.routine || now, rs = S.data.routines;
-  $('#routines').innerHTML = rs.map(function (r) {
-    var n = S.data.chores.filter(function (c) { return c.r === r.id && !c.done; }).length;
-    return '<button data-routine="' + r.id + '" class="' + (r.id === sel ? 'is-on' : '') + '">' + esc(r.name) + '<span class="n">' + n + '</span></button>';
-  }).join('');
-  var list = S.data.chores.filter(function (c) { return c.r === sel; }).sort(function (a, b) { return a.done - b.done; });
-  var r = rs.filter(function (x) { return x.id === sel; })[0];
-  $('#choreList').innerHTML = list.length ? '<div class="group"><h2><span>' + esc(r.range) + (sel === now ? '<span class="now-tag">NOW</span>' : '') + '</span><span>' +
-    list.filter(function (c) { return c.done; }).length + ' / ' + list.length + '</span></h2>' + list.map(function (c) {
-      var p = person(c.who), by = c.doneBy ? person(c.doneBy).name : '';
-      return '<div class="item' + (c.done ? ' is-done' : '') + '" data-chore="' + c.id + '">' +
-        '<button class="check" aria-label="' + (c.done ? 'Not done' : 'Done') + '">' + (c.done ? '✓' : '') + '</button>' +
-        '<span class="emoji">' + c.emoji + '</span>' +
-        '<span class="label"><b>' + esc(c.title) + '</b>' + (by ? '<small>by ' + esc(by) + '</small>' : '') + '</span>' +
-        '<span class="who" style="' + pstyle(p) + '">' + esc(p.name) + '</span></div>';
-    }).join('') + '</div>' : '<div class="empty">Nothing this ' + esc(r.name.toLowerCase()) + '.</div>';
-}
-
-function setChore(c, done, by) {
-  c.done = done;
-  if (done && by) c.doneBy = by; else delete c.doneBy;
-  renderChores();
-  save('POST', '/chores/' + c.id, { done: done, doneBy: c.doneBy }).then(function (r) { S.data.stars = r.stars; S.data.week = r.week; });
-}
-
-function whoDidIt(c) {
-  var sh = $('#sheet');
-  sh.innerHTML = '<div class="card"><h3>' + c.emoji + ' Who did it?</h3><div class="people">' + S.data.people.map(function (p) {
-    return '<button data-by="' + p.id + '" style="' + pstyle(p) + '">' + esc(p.name) + '</button>';
-  }).join('') + '</div><button class="cancel" data-cancel>Cancel</button></div>';
-  sh.hidden = false;
-  sh.onclick = function (e) {
-    var b = e.target.closest('[data-by]');
-    if (b) setChore(c, true, b.dataset.by);
-    if (b || e.target.closest('[data-cancel]') || e.target === sh) sh.hidden = true;
-  };
-}
-
-function onChoreClick(e) {
-  var b = e.target.closest('[data-routine]');
-  if (b) { S.routine = b.dataset.routine === currentRoutine() ? null : b.dataset.routine; return renderChores(); }
-  var row = e.target.closest('[data-chore]');
-  if (!row) return;
-  var c = S.data.chores.filter(function (x) { return x.id === row.dataset.chore; })[0];
-  if (!c) return;
-  if (c.done) return setChore(c, false);
-  if (c.who === 'any' && S.data.people.length > 1) return whoDidIt(c);
-  setChore(c, true, c.who === 'any' ? S.data.people[0].id : null);
-}
-
 // ------------------------------------------------------------ tabs + boot
-function render() { renderList(); renderChores(); }
+function render() { renderList(); }
 function showTab(name) {
   S.tab = name;
-  $('#title').textContent = name === 'chores' ? 'Chores' : 'Shopping';
   $('#tab-shopping').hidden = name !== 'shopping';
-  $('#tab-chores').hidden = name !== 'chores';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs [data-tab]'), function (b) { b.classList.toggle('is-on', b.dataset.tab === name); });
-  try { localStorage.setItem('hq-m-tab', name); } catch (e) {}
 }
 
 document.querySelector('.tabs').addEventListener('click', function (e) {
@@ -237,9 +171,8 @@ $('#addForm').addEventListener('submit', function (e) {
 });
 $('#tab-shopping').addEventListener('click', onShopClick);
 $('#shopList').addEventListener('toggle', function (e) { if (e.target.classList.contains('got')) S.gotOpen = e.target.open; }, true);
-$('#tab-chores').addEventListener('click', onChoreClick);
 document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
 
-try { showTab(localStorage.getItem('hq-m-tab') || 'shopping'); } catch (e) { showTab('shopping'); }
+showTab('shopping');
 load();
 setInterval(function () { if (!document.hidden) load(); }, POLL_MS);

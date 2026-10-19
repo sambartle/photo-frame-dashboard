@@ -108,12 +108,7 @@
     return App.events().filter(function (e) { return e.id === id; })[0];
   };
 
-  // ------------------------------------------------------------ chores + weather helpers
-  App.currentRoutine = function () {
-    var h = App.now().getHours();
-    for (var i = 0; i < D.routines.length; i++) if (h >= D.routines[i].from && h < D.routines[i].to) return D.routines[i];
-    return D.routines[D.routines.length - 1];
-  };
+  // ------------------------------------------------------------ weather helpers
   // Forecast hours start at local midnight on W.day and run for 48 hours.
   function wxHour() {
     var W = D.weather, a = W.day.split('-');

@@ -157,9 +157,6 @@ button.card:active, .h-hero:active, .h-photo:active { transform: scale(.985); }
 .pill--alert { background: #fff; color: var(--alert); }
 .pulse { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
 
-.ring-bg { fill: none; stroke: rgb(var(--c-rgb) / .16); stroke-width: 7; }
-.ring-fg { fill: none; stroke: var(--c); stroke-width: 7; stroke-linecap: round; }
-
 /* ---------------------------------------------------------------- toasts */
 .toasts { position: absolute; left: 76px; right: 0; bottom: 24px; display: flex; justify-content: center; pointer-events: none; z-index: 60; }
 .toast {

@@ -6,7 +6,7 @@
   var D = window.DATA, $ = App.$;
   var CACHE_KEY = 'hq-cache-v1';
   var PERIOD = { state: 30e3, calendar: 5 * 60e3, weather: 15 * 60e3, home: 10e3 };
-  var REDRAW = { state: ['home', 'tasks', 'shopping'], calendar: ['home', 'calendar'], weather: ['home'], home: ['home', 'control'] };
+  var REDRAW = { state: ['home', 'shopping'], calendar: ['home', 'calendar'], weather: ['home'], home: ['home', 'control'] };
   var last = {}, due = {}, wrote = {}, cache = {};
   var locked = false;
 
@@ -60,13 +60,11 @@
       D.people.forEach(function (p) { tracked[p.id] = p; });
       D.people = s.people.map(function (p) { return Object.assign(tracked[p.id] || {}, p); });
       D.ALL = D.people.map(function (p) { return p.id; });
-      if (s.routines && s.routines.length) D.routines = s.routines;
-      D.chores = merge(D.chores, s.chores);
-      D.stars = s.stars; D.week = s.week;
       D.stores = s.stores; D.catOrder = s.catOrder; D.catalog = s.catalog; D.usuals = s.usuals;
       D.groceries = merge(D.groceries, s.groceries);
       D.photos = merge(D.photos, s.photos);
       D.hasHome = s.hasHome; D.scenes = s.scenes; D.cameras = s.cameras;
+      D.bins = s.bins || null;
       var rail = $('.rail-item[data-go="control"]');
       if (rail) rail.hidden = !D.hasHome;
     },
@@ -79,7 +77,10 @@
         });
       });
     },
-    weather: function (w) { D.weather = w && !w.none && !w.error ? w : null; },
+    weather: function (w) {
+      D.weather = w && !w.none && !w.error ? w : null;
+      D.warnings = (w && w.warnings) || [];
+    },
     home: function (h, quiet) {
       if (h.none) { D.hasHome = false; return; }
       D.homeOnline = !!h.online;
@@ -89,6 +90,7 @@
       D.rooms = h.rooms; D.devices = merge(D.devices, h.devices);
       D.climate = h.climate; D.media = h.media; D.cameras = h.cameras; D.scenes = h.scenes;
       D.alertConfig = h.alertConfig;
+      D.energy = h.energy || null;
       h.presence.forEach(function (x) {
         var p = D.people.filter(function (q) { return q.id === x.id; })[0];
         if (p) { p.home = x.home; p.status = x.status; }

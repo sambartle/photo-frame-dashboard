@@ -8,7 +8,8 @@ behind it:
 | --- | --- |
 | Calendar, Today lanes, "Next up" | Google Calendar secret ICS links (read-only), plus events added on the frame |
 | Weather | [Open-Meteo](https://open-meteo.com) for your latitude/longitude (no API key) |
-| Chores, stars, weekly streaks | Chore list in `family.json`; ticks are stored in Cloudflare D1 |
+| Weather warnings | [Met Office](https://weather.metoffice.gov.uk/guides/rss) regional feed, kept to your areas (UK only, no key) |
+| Bin day | Your council's collection rotation, written into `family.json` |
 | Shopping list | Cloudflare D1, shared by every screen and phone that opens the dashboard |
 | Photos (slideshow, home tile, ambient mode) | Uploaded from a phone at `/upload`; stored in Cloudflare R2 |
 | Home tab, presence, doorbell/leak/smoke/garage alerts | Home Assistant REST API (optional) |
@@ -47,16 +48,13 @@ npx wrangler login
    cp calendars.example.json calendars.json
    ```
 
-   - `people`: names and colours. Set `"kid": true` for anyone who earns chore stars. Add
-     `"ha": "person.x"` to show whether they're home.
+   - `people`: names and colours. Add `"ha": "person.x"` to show whether they're home.
    - `calendars.json`: in Google Calendar, open **Settings → (the calendar) → Integrate calendar →
      Secret address in iCal format**. Give each link the people it belongs to, or `"all"`. If the
      same invite appears on two calendars, it shows once with both people. To get a "Leave by"
      reminder, add `Travel: 15` (minutes) anywhere in an event's description. Anyone with one of
      these links can read that calendar, so they go up as a secret (step 3), never into the
      deployed code. If one leaks, **Reset** it on the same Google page and update the secret.
-   - `chores`: `r` is the routine (`morning`, `after` or `evening` by default) and `who` is a
-     person's id or `"any"`. Use `days` (`["mon", "thu"]`) for chores that aren't daily.
    - `home`: delete this section if you don't use Home Assistant; the Home tab then disappears.
 
 3. **Secrets.** Choose a long random dashboard key, letters and digits only (`openssl rand -hex 24`)
@@ -103,12 +101,12 @@ wrangler can't find `wrangler.jsonc` and stops with "Required Worker name missin
 | To change… | Edit | Then | Shows up |
 | --- | --- | --- | --- |
 | The dashboard code | the files in `dashboard/` | `npm run deploy`, then reload the frame | at the next reload |
-| People, chores, routines, stores, shopping catalog, weather location | `family.json` | `npm run deploy`, then reload the frame | at the next reload |
+| People, stores, shopping catalog, weather location | `family.json` | `npm run deploy`, then reload the frame | at the next reload |
 | Calendars | `calendars.json` | `npm run calendars` | within ~15 min, no deploy |
 | Home Assistant devices | `home` in `family.json` | `npm run deploy` | within ~10 s of the reload |
 | Home Assistant token | in Home Assistant | `npx wrangler secret put HA_TOKEN` | immediately |
 | The dashboard key | — | `npx wrangler secret put DASHBOARD_KEY`, then re-key every device | immediately |
-| Shopping list, chore ticks, photos | on a screen or phone | nothing | within 30 s on other screens |
+| Shopping list, photos | on a screen or phone | nothing | within 30 s on other screens |
 
 ### Update the dashboard
 
@@ -133,22 +131,27 @@ npx wrangler versions list     # find the previous version id
 npx wrangler rollback <version-id>
 ```
 
-### Family, chores and shopping
+### Family and shopping
 
 All in `family.json`, then `npm run deploy`:
 
-- **People:** `id`, `name`, `color`. Add `"kid": true` for chore stars and `"ha": "person.x"` for the
-  home/away display. Changing someone's `id` detaches their existing chore ticks and calendar mapping.
-- **Routines:** the parts of the day chores are grouped into, with `from` and `to` hours.
-- **Chores:** `r` is a routine id, `who` a person id or `"any"`. `days` limits a chore to certain
-  weekdays (`["tue"]` for bin night). A chore's id is made from its routine, person and title. If
-  you rename one, today's tick for it is lost; give it a fixed `"id"` to avoid that.
+- **People:** `id`, `name`, `color`. Add `"ha": "person.x"` for the home/away display. Changing
+  someone's `id` detaches their calendar mapping.
 - **Shopping:**
   - `stores` sets the filter buttons. New items go to the first store, or to the one being viewed.
   - `categories` sets the aisle order, and `storeOrder` can reorder the aisles per store.
   - `catalog` maps item names to aisles; unknown items go under "Other".
   - `usuals` are the quick-add tiles on the frame.
   - If you remove a store, items already listed under it still show under **All**.
+- **Bins:** `types` names each bin with a colour; `every` gives each bin's rotation, as one
+  collection date (`from`) and how many `weeks` apart. Copy them from your council's calendar.
+  `moved` lists bank-holiday changes (`"usual date": "actual date"`, or `null` when skipped).
+  The home screen shows the next collection; from 4 PM the day before it asks for the bins to go
+  out, with a banner at 6 PM and 8:30 PM until someone taps **They're out**.
+- **Weather warnings (UK):** `warnings.region` is a Met Office region code (`yh` Yorkshire &
+  Humber, `se`, `nw`, `wl`, `os` …; the codes are on the Met Office RSS page) and `areas` lists the
+  council areas you care about. A warning naming one of them replaces the forecast line until it
+  ends; tap it for the details.
 
 ### Calendars
 
@@ -175,7 +178,7 @@ it in Google Calendar's settings, which kills the old link, and put the new one 
 ### Connecting devices
 
 - **A phone or computer:** open `https://<your dashboard>/?key=<DASHBOARD_KEY>` once. Phones get
-  the phone page (shopping, chores, photos); bigger screens get the wall dashboard. Open the address
+  the phone page (shopping, photos); bigger screens get the wall dashboard. Open the address
   with `?wall` to see the wall dashboard on a phone, and with `?phone` to switch back.
 - **A frame:** `scripts/set-kiosk-url.sh 'https://<your dashboard>/?key=<DASHBOARD_KEY>'` from the
   repository root, with the frame on ADB.
@@ -192,7 +195,7 @@ frame, the heart on the Photos tab marks favourites, which come up more often.
 
 ### Backups
 
-Shopping, chores and frame-added events live in D1:
+Shopping and frame-added events live in D1 (plus old chore ticks in `chore_log`, kept but no longer used):
 
 ```bash
 npx wrangler d1 export home-hq --remote --output home-hq-backup.sql
@@ -281,6 +284,10 @@ seconds, so an alert can take up to 10 s to appear:
   `carbon_monoxide` device class, get the carbon monoxide wording. The frame only shows the alert;
   it doesn't replace the alarms themselves.
 - `garageOpenMinutes`: show a banner when the garage has been open this long.
+
+`energy` adds a line to the Home card: `cost` is a sensor (or a list, added up) with today's
+spend, such as a smart meter's electricity and gas cost today. With `power` (W or kW now), the
+line switches to the current draw while it's above `high` watts (3000 by default).
 
 Press and hold the clock in the sidebar, or press **D**, for display controls. From there you can
 preview ambient and night modes, show each alert without touching the house, refresh data, and
