@@ -11,16 +11,8 @@
   App.on = function (e, fn) { (handlers[e] = handlers[e] || []).push(fn); };
   App.emit = function (e, a) { (handlers[e] || []).forEach(function (fn) { fn(a); }); };
 
-  // ------------------------------------------------------------ time (real; the controls drawer can preview another time)
-  var offset = 0;
-  App.now = function () { return new Date(Date.now() + offset); };
-  App.setTime = function (h, m) {
-    if (h == null) offset = 0;
-    else { var d = new Date(); d.setHours(h, m, 0, 0); offset = d - Date.now(); }
-    lastMin = -1;
-    App.emit('time');
-    App.rerender();
-  };
+  // ------------------------------------------------------------ time (always the real clock)
+  App.now = function () { return new Date(); };
   App.dayStart = function (d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
   App.addDays = function (d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; };
   App.sameDay = function (a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); };

@@ -123,16 +123,14 @@
 
   // ------------------------------------------------------------ display controls drawer
   function demoHTML() {
-    var t = App.now();
     return '<div class="demo-panel">' +
       '<div class="demo-head"><div><div class="label label--light">Home HQ</div><h2 class="serif">Display controls</h2></div><button class="demo-x" data-demo-close>' + App.icon('x', 28) + '</button></div>' +
-      '<div class="demo-sec"><div class="label label--light">Preview time of day · showing ' + App.fmt.time(t) + '</div><div class="demo-grid">' +
-      '<button data-time="7:10">7:10 AM</button><button data-time="15:18">3:18 PM</button><button data-time="19:45">7:45 PM</button><button data-time="23:40">11:40 PM</button><button data-time="real">Real time</button></div></div>' +
       '<div class="demo-sec"><div class="label label--light">Modes</div><div class="demo-grid">' +
       '<button data-mode="ambient">Ambient</button><button data-mode="night">Night</button><button data-fastidle>' + (App.idle.home < 60 ? 'Idle: fast ✓' : 'Idle: fast') + '</button><button data-reload>Refresh data</button></div></div>' +
       (D.hasHome ? '<div class="demo-sec"><div class="label label--light">Test alerts (nothing is sent to the house)</div><div class="demo-grid">' +
       '<button data-alert="doorbell">Doorbell</button><button data-alert="leak">Water leak</button><button data-alert="smoke">Smoke</button><button data-alert="garage">Garage open</button></div></div>' : '') +
-      '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p></div>' +
+      '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p>' +
+      '<p class="demo-note">Version ' + __APP_VERSION__ + '</p></div>' +
       '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–6</b> views</p>' +
       '</div>';
   }
@@ -153,12 +151,6 @@
     var b = e.target.closest('button');
     if (!b) { if (e.target === $('#demo')) closeDemo(); return; }
     if (b.hasAttribute('data-demo-close')) return closeDemo();
-    if (b.dataset.time) {
-      if (b.dataset.time === 'real') App.setTime(null);
-      else { var p = b.dataset.time.split(':'); App.setTime(+p[0], +p[1]); }
-      App.openDemo();
-      return;
-    }
     if (b.dataset.mode) { closeDemo(); App.setMode(b.dataset.mode); return; }
     if (b.hasAttribute('data-fastidle')) {
       var fast = App.idle.home >= 60;
