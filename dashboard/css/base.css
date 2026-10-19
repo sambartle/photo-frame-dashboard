@@ -289,6 +289,16 @@ button.card:active, .h-hero:active, .h-photo:active { transform: scale(.985); }
 }
 .demo-grid button:active, .demo-grid button.is-on { background: #fff; color: var(--ink); }
 .demo-note { font-size: 16px; color: rgba(255, 255, 255, .6); }
+.demo-test { display: flex; gap: 8px; margin-top: 10px; }
+.demo-test select {
+  flex: 1; min-width: 0; min-height: var(--tap); border-radius: 14px; padding: 0 16px; border: 0;
+  background: rgba(255, 255, 255, .1); color: #fff; font: inherit; font-size: 18px; font-weight: 700;
+}
+.demo-test select option { color: var(--ink); }
+.demo-test button {
+  min-height: var(--tap); border-radius: 14px; padding: 0 22px;
+  background: #fff; color: var(--ink); font-size: 18px; font-weight: 800;
+}
 
 /* ---------------------------------------------------------------- night dashboard (tap on night clock) */
 .stage[data-mode="nightdash"] > .rail,

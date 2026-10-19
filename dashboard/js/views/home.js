@@ -51,9 +51,24 @@
       return '<div class="wxs-item"><span class="wxs-tag is-' + x.level + '">' + App.esc(x.level) + ' · ' + App.esc(x.type) + '</span>' +
         '<h2 class="serif">' + App.esc(x.type[0].toUpperCase() + x.type.slice(1)) + ' warning</h2>' +
         '<div class="wxs-when num">' + warnWhen(x) + '</div>' +
-        '<p>Covers ' + App.esc(x.areas.join(', ')) + '. Details at metoffice.gov.uk.</p></div>';
+        (x.test ? '<p>A test from the display controls; it goes away by itself in two minutes.</p></div>'
+          : '<p>Covers ' + App.esc(x.areas.join(', ')) + '. Details at metoffice.gov.uk.</p></div>');
     }).join('') + '<div class="label">Met Office · ' + App.esc(list[0].region) + '</div></div>');
   }
+
+  // Display controls test: an amber wind warning for the next three hours, gone after two minutes.
+  function localIso(d) {
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  App.testWarning = function () {
+    var now = App.now(), clear = function () { D.warnings = D.warnings.filter(function (x) { return !x.test; }); };
+    clear();
+    D.warnings.unshift({ level: 'amber', type: 'wind', region: 'Test', areas: [], from: localIso(now), to: localIso(new Date(+now + 3 * 3600e3)), test: true });
+    App.go('home');
+    paint();
+    setTimeout(function () { clear(); if (App.current === 'home') paint(); }, 120e3);
+  };
 
   // Only people with a Home Assistant person entity; everyone else's whereabouts are unknown.
   function presence() {
@@ -153,9 +168,11 @@
     return D.bins && D.bins.next.filter(function (c) { return !(App.sameDay(ymdDate(c.date), now) && now.getHours() >= 9); })[0] || null;
   }
   // "Due" from 4 PM the day before until 9 AM on the day: that's when bins go out.
+  var binsTest = null; // { until, out } while the display controls test runs
   App.binsDue = function () {
     var c = nextBins();
     if (!c) return null;
+    if (binsTest && Date.now() < binsTest.until) return { c: c, out: binsTest.out, tonight: true, test: true };
     var day = ymdDate(c.date), now = App.now(), h = now.getHours();
     var eve = App.sameDay(App.addDays(day, -1), now) && h >= 16, morning = App.sameDay(day, now) && h < 9;
     if (!eve && !morning) return null;
@@ -185,6 +202,7 @@
     }).join('') + '</div>');
   }
   App.setBinsOut = function (c, out) {
+    if (binsTest && Date.now() < binsTest.until) { binsTest.out = out; App.emit('data'); return; } // test: nothing saved
     D.bins.out = out ? { date: c.date, at: Date.now() } : null;
     App.emit('data');
     App.write('state', 'POST', '/bins/out', { date: c.date, out: out }).then(function (b) { D.bins = b; App.emit('data'); });
@@ -193,7 +211,7 @@
     var due = App.binsDue();
     if (!due) return binsSheet();
     App.setBinsOut(due.c, !due.out);
-    if (!due.out) App.toast('Bins out · thanks', { icon: 'check', ms: 2500 });
+    if (!due.out) App.toast(due.test ? 'Test: bins out (not saved)' : 'Bins out · thanks', { icon: 'check', ms: 2500 });
   }
 
   function shopping() {
@@ -304,16 +322,35 @@
   // The night before collection: a banner on every view at 6 PM, again at 8:30 PM if nobody has
   // said the bins are out. It goes away by itself once they are.
   var binBanner = null;
-  App.on('minute', function (n) {
-    var due = App.binsDue(), t = n.getHours() * 60 + n.getMinutes();
-    if (binBanner && (!due || due.out)) { binBanner(); binBanner = null; }
-    if (!due || due.out || !due.tonight || (t !== 18 * 60 && t !== 20 * 60 + 30)) return;
+  function showBinBanner(due) {
     if (binBanner) binBanner();
     var names = due.c.bins.map(function (b) { return ((D.bins.types || {})[b] || { name: b }).name; }).join(' and ');
     binBanner = App.banner({
       tone: 'ink', icon: 'bell', title: App.esc(names) + (due.c.bins.length > 1 ? ' bins' : ' bin') + ' out tonight',
-      sub: 'Collected tomorrow morning', action: 'They’re out', dismiss: 'Later',
-      onAction: function () { binBanner = null; App.setBinsOut(due.c, true); }
+      sub: due.test ? 'Test from the display controls · nothing is saved' : 'Collected tomorrow morning', action: 'They’re out', dismiss: 'Later',
+      onAction: function () {
+        binBanner = null;
+        App.setBinsOut(due.c, true);
+        if (due.test) App.toast('Test: bins out (not saved)', { icon: 'check', ms: 2500 });
+      }
     });
+  }
+  App.on('minute', function (n) {
+    var due = App.binsDue(), t = n.getHours() * 60 + n.getMinutes();
+    if (binBanner && (!due || due.out)) { binBanner(); binBanner = null; }
+    if (!due || due.out || due.test || !due.tonight || (t !== 18 * 60 && t !== 20 * 60 + 30)) return;
+    showBinBanner(due);
   });
+  // Display controls test: the card goes to "Put out tonight" and the banner shows, for two minutes.
+  App.testBins = function () {
+    binsTest = { until: Date.now() + 120e3, out: false };
+    App.go('home');
+    paint();
+    showBinBanner(App.binsDue());
+    setTimeout(function () {
+      binsTest = null;
+      if (binBanner) { binBanner(); binBanner = null; }
+      if (App.current === 'home') paint();
+    }, 120e3);
+  };
 })();

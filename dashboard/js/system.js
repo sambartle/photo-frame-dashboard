@@ -127,12 +127,20 @@
       '<div class="demo-head"><div><div class="label label--light">Home HQ</div><h2 class="serif">Display controls</h2></div><button class="demo-x" data-demo-close>' + App.icon('x', 28) + '</button></div>' +
       '<div class="demo-sec"><div class="label label--light">Modes</div><div class="demo-grid">' +
       '<button data-mode="ambient">Ambient</button><button data-mode="night">Night</button><button data-fastidle>' + (App.idle.home < 60 ? 'Idle: fast ✓' : 'Idle: fast') + '</button><button data-reload>Refresh data</button></div></div>' +
-      (D.hasHome ? '<div class="demo-sec"><div class="label label--light">Test alerts (nothing is sent to the house)</div><div class="demo-grid">' +
-      '<button data-alert="doorbell">Doorbell</button><button data-alert="leak">Water leak</button><button data-alert="smoke">Smoke</button><button data-alert="garage">Garage open</button></div></div>' : '') +
+      (tests().length ? '<div class="demo-sec"><div class="label label--light">Test alerts (nothing is sent to the house)</div><div class="demo-test">' +
+      '<select id="demoAlert" aria-label="Alert to test">' + tests().map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select>' +
+      '<button data-test>Show</button></div></div>' : '') +
       '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p>' +
       '<p class="demo-note">Version ' + __APP_VERSION__ + '</p></div>' +
       '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–5</b> views</p>' +
       '</div>';
+  }
+  // [id, label]: Home Assistant alerts only when it's set up; weather and bins work without it.
+  function tests() {
+    var t = D.hasHome ? [['doorbell', 'Doorbell'], ['leak', 'Water leak'], ['smoke', 'Smoke'], ['garage', 'Garage open']] : [];
+    t.push(['weather', 'Weather warning']);
+    if (D.bins && D.bins.next.length) t.push(['bins', 'Bins out tonight']);
+    return t;
   }
   function status() {
     var bits = [D.events.length + ' calendar events', D.photos.length + ' photos', D.weather ? 'weather ok' : 'no weather'];
@@ -161,11 +169,13 @@
       App.openDemo();
       return;
     }
-    if (b.dataset.alert) {
+    if (b.hasAttribute('data-test')) {
+      var which = $('#demoAlert').value;
       closeDemo();
-      // Previews only: the leak valve and door lock still need a deliberate hold to act.
+      // Previews only: the leak valve and door lock still need a deliberate hold to act, and the
+      // weather and bins tests stay on this screen for two minutes without saving anything.
       ({ doorbell: App.doorbell, leak: App.leak, smoke: function () { App.smoke([{ name: 'Test: Landing', co: false }]); },
-        garage: function () { App.garageOpenAlert(15); } })[b.dataset.alert]();
+        garage: function () { App.garageOpenAlert(15); }, weather: App.testWarning, bins: App.testBins })[which]();
       return;
     }
     if (b.hasAttribute('data-reload')) {
