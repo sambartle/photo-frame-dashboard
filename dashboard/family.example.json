@@ -7,7 +7,7 @@
 
   "bins": {
     "types": {
-      "general": { "name": "Black", "what": "General waste", "color": "#222222" },
+      "general": { "name": "Black", "what": "General waste", "color": "#222222", "lid": "#222222" },
       "recycling": { "name": "Blue", "what": "Cans, glass and plastic", "color": "#1F6FEB" }
     },
     "every": [

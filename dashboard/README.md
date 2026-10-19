@@ -143,7 +143,7 @@ All in `family.json`, then `npm run deploy`:
   - `catalog` maps item names to aisles; unknown items go under "Other".
   - `usuals` are the quick-add tiles on the frame.
   - If you remove a store, items already listed under it still show under **All**.
-- **Bins:** `types` names each bin with a colour; `every` gives each bin's rotation, as one
+- **Bins:** `types` names each bin with a `color` (and a `lid` colour when it differs); `every` gives each bin's rotation, as one
   collection date (`from`) and how many `weeks` apart. Copy them from your council's calendar.
   `moved` lists bank-holiday changes (`"usual date": "actual date"`, or `null` when skipped).
   The home screen shows the next collection; from 4 PM the day before it asks for the bins to go

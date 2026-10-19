@@ -113,19 +113,20 @@
 .h-st-row.is-warn span { color: inherit; }
 
 /* ---- bins: next collection; dark from 4 PM the day before until they're out */
-.h-bins { display: flex; align-items: center; gap: 16px; padding: 12px 18px; text-align: left; }
-.h-bins[hidden] { display: none; }
-.h-bins-icons { display: flex; gap: 4px; flex: none; }
+/* button.h-bins: beats base.css's button.card { display: block } */
+button.h-bins { display: flex; align-items: center; gap: 14px; padding: 8px 18px 8px 12px; text-align: left; }
+button.h-bins[hidden] { display: none; }
+.h-bins-icons { display: flex; gap: 4px; flex: none; align-self: stretch; align-items: center; }
 .h-bins-icons .bin { display: block; }
-.h-bins-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.h-bins-text b { font-size: 20px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.h-bins-text small { font-size: var(--fs-min); color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.h-bins-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.h-bins-what { font-size: 17px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.h-bins-what b { font-size: 20px; font-weight: 800; color: var(--ink); }
 .h-bins-in { font-size: 20px; color: var(--ink-2); flex: none; }
 .h-bins-go { flex: none; display: flex; align-items: center; gap: 6px; font-size: 17px; font-weight: 800; padding: 10px 14px; border-radius: 12px; background: #fff; color: var(--ink); }
 .h-bins-go.is-done { background: none; color: var(--ok); padding: 0; }
 .h-bins.is-due { background: var(--ink); color: #fff; }
-.h-bins.is-due small { color: rgba(255, 255, 255, .7); }
-.h-bins.is-due .bin rect { stroke: #fff; stroke-width: 1.5; }
+.h-bins.is-due .h-bins-what, .h-bins.is-due .h-bins-what b { color: #fff; }
+.h-bins.is-due .bin-body, .h-bins.is-due .bin-lid { stroke: #fff; stroke-width: 1; }
 
 /* ---- next-up hero when it's time to leave */
 .h-hero.is-go { background: var(--amber); color: var(--ink); }

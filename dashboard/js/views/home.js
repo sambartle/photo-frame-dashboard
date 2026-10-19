@@ -133,9 +133,16 @@
   }
 
   // ------------------------------------------------------------ bins
-  App.binIcon = function (color, size) {
-    return '<svg class="bin" width="' + size + '" height="' + Math.round(size * 1.17) + '" viewBox="0 0 24 28" aria-hidden="true">' +
-      '<rect x="3" y="6" width="18" height="21" rx="2" fill="' + color + '"/><rect x="1.5" y="2.5" width="21" height="4" rx="1" fill="' + color + '"/></svg>';
+  // A UK wheelie bin side-on: tapered body, hinged lid with a front lip, handle at the back, wheel.
+  // t is a bins.types entry: color for the body, and lid for a different lid (Rotherham's pink lid).
+  App.binIcon = function (t, size) {
+    var body = t.color || '#7A756B', lid = t.lid || body;
+    return '<svg class="bin" width="' + size + '" height="' + Math.round(size * 32 / 26) + '" viewBox="0 0 26 32" aria-hidden="true">' +
+      '<path class="bin-body" d="M4.2 7.6h18.2l-2 20H6.9z" fill="' + body + '"/>' +
+      '<path class="bin-body" d="M0.8 4.6h4.8v2.6H0.8z" fill="' + body + '"/>' +
+      '<path class="bin-lid" d="M3 5.4h21.6v3.6h-1.7V7.8H3z" fill="' + lid + '"/>' +
+      '<path d="M8.5 12h10.3" stroke="#fff" stroke-opacity=".18" stroke-width="1"/>' +
+      '<circle cx="7.6" cy="27.8" r="3.6" fill="#151515"/><circle cx="7.6" cy="27.8" r="1.3" fill="#8A857B"/></svg>';
   };
   function binType(id) { return (D.bins.types || {})[id] || { name: id, color: '#7A756B' }; }
   function binNames(c) { return c.bins.map(function (b) { return binType(b).name; }).join(' + '); }
@@ -159,20 +166,20 @@
     if (!c) return '';
     var due = App.binsDue(), day = ymdDate(c.date), today = App.dayStart(App.now());
     var days = Math.round((day - today) / 864e5);
-    var icons = c.bins.map(function (b) { return App.binIcon(binType(b).color, 30); }).join('');
+    var icons = c.bins.map(function (b) { return App.binIcon(binType(b), c.bins.length > 1 ? 44 : 54); }).join('');
     var what = c.bins.map(function (b) { return binType(b).what || ''; }).filter(Boolean).join(' · ');
     var when = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : App.fmt.day(day) + ' ' + day.getDate() + ' ' + App.fmt.monthShort(day);
     var right = due
       ? (due.out ? '<span class="h-bins-go is-done">' + App.icon('check', 22) + 'Out</span>' : '<span class="h-bins-go">' + (due.tonight ? 'Put out tonight' : 'Put out now') + '</span>')
       : '<span class="h-bins-in num">' + (days === 0 ? 'today' : days === 1 ? 'tomorrow' : 'in ' + days + ' days') + '</span>';
     return '<div class="h-bins-icons">' + icons + '</div>' +
-      '<div class="h-bins-text"><span class="label' + (due && !due.out ? ' label--light' : '') + '">Bins · ' + when + '</span><b>' + App.esc(binNames(c)) + '</b>' +
-      (what ? '<small>' + App.esc(what) + '</small>' : '') + '</div>' + right;
+      '<div class="h-bins-text"><span class="label' + (due && !due.out ? ' label--light' : '') + '">Bins · ' + when + '</span>' +
+      '<span class="h-bins-what"><b>' + App.esc(binNames(c)) + '</b>' + (what ? ' · ' + App.esc(what) : '') + '</span></div>' + right;
   }
   function binsSheet() {
     App.sheet('<div class="sheet-pad bns"><div class="label">Next collections</div>' + D.bins.next.map(function (c) {
       var d = ymdDate(c.date);
-      return '<div class="bns-row">' + c.bins.map(function (b) { return App.binIcon(binType(b).color, 34); }).join('') +
+      return '<div class="bns-row">' + c.bins.map(function (b) { return App.binIcon(binType(b), 38); }).join('') +
         '<div><b>' + App.fmt.day(d) + ' ' + d.getDate() + ' ' + App.fmt.month(d) + '</b><span>' +
         App.esc(c.bins.map(function (b) { var t = binType(b); return t.name + (t.what ? ' (' + t.what.toLowerCase() + ')' : ''); }).join(', ')) + '</span></div></div>';
     }).join('') + '</div>');
