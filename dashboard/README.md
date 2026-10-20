@@ -9,7 +9,7 @@ behind it:
 | Calendar, Today lanes, "Next up" | Google Calendar secret ICS links (read-only), plus events added on the frame |
 | Weather | [Open-Meteo](https://open-meteo.com) for your latitude/longitude (no API key) |
 | Weather warnings | [Met Office](https://weather.metoffice.gov.uk/guides/rss) regional feed, kept to your areas (UK only, no key) |
-| Bin day | Your council's collection rotation, written into `family.json` |
+| Bin day | Your council's collection rotation, written into `settings.json` |
 | Shopping list | Cloudflare D1, shared by every screen and phone that opens the dashboard |
 | Photos (slideshow, home tile, ambient mode) | Uploaded from a phone at `/upload`; stored in Cloudflare R2 |
 | Home tab, presence, doorbell/leak/smoke/garage alerts | Home Assistant REST API (optional) |
@@ -41,34 +41,43 @@ npx wrangler login
    npm run db:migrate
    ```
 
-2. **Your family.** Copy both examples and edit them. Both files are gitignored.
+2. **Your settings and secrets.** Copy both examples and edit them. Both files are gitignored.
 
    ```bash
-   cp family.example.json family.json
-   cp calendars.example.json calendars.json
+   cp settings.example.json settings.json
+   cp secrets.example.json secrets.json
    ```
 
-   - `people`: names and colours. Add `"ha": "person.x"` to show whether they're home.
-   - `calendars.json`: in Google Calendar, open **Settings → (the calendar) → Integrate calendar →
+   `settings.json` is what the dashboard shows and does; it's built into the deployed code.
+   `secrets.json` holds what grants access, and is uploaded as encrypted Cloudflare secrets instead:
+
+   - `people` (settings): names and colours. Add `"ha": "person.x"` to show whether they're home.
+   - `home` (settings): delete this section if you don't use Home Assistant; the Home tab then
+     disappears.
+   - `DASHBOARD_KEY` (secrets): a long random key, letters and digits only (`openssl rand -hex 24`) so
+     it survives `adb shell`. Every screen and phone needs it once.
+   - `HA_TOKEN` (secrets): only with Home Assistant; see [Connect it](#connect-it).
+   - `CALENDARS` (secrets): in Google Calendar, open **Settings → (the calendar) → Integrate calendar →
      Secret address in iCal format**. Give each link the people it belongs to, or `"all"`. If the
      same invite appears on two calendars, it shows once with both people. To get a "Leave by"
      reminder, add `Travel: 15` (minutes) anywhere in an event's description. Anyone with one of
-     these links can read that calendar, so they go up as a secret (step 3), never into the
-     deployed code. If one leaks, **Reset** it on the same Google page and update the secret.
-   - `home`: delete this section if you don't use Home Assistant; the Home tab then disappears.
+     these links can read that calendar. If one leaks, **Reset** it on the same Google page and
+     upload the new one.
 
-3. **Secrets.** Choose a long random dashboard key, letters and digits only (`openssl rand -hex 24`)
-   so it survives `adb shell`. Every screen and phone needs it once.
+3. **Upload the secrets.**
 
    ```bash
-   npx wrangler secret put DASHBOARD_KEY
-   npm run calendars
-   npx wrangler secret put HA_TOKEN      # only with Home Assistant: Profile → Security → Long-lived access tokens
+   npm run secrets
    ```
 
-   Secrets are encrypted at Cloudflare and can't be read back, even from the dashboard.
-   `npm run calendars` checks `calendars.json` first (valid JSON, known people) and refuses to
-   upload a broken file. Run it again after every edit; no redeploy is needed.
+   It checks `secrets.json` (valid JSON, a sensible key and token, calendar people that exist in
+   `settings.json`), refuses if git could commit the file, makes it readable by you only, and
+   uploads every secret that has a value in one go. Blank ones are skipped, so they never replace
+   what's already on Cloudflare. Run it again after any change; no redeploy is needed.
+
+   Cloudflare never shows a secret again, even to you, so `secrets.json` is your only readable copy.
+   Keep it out of synced folders (Dropbox, Google Drive and so on) and back it up in a password
+   manager.
 
 4. **Deploy.**
 
@@ -90,7 +99,7 @@ npx wrangler login
    pick who's adding them, and choose photos. They're shrunk and rotated on the phone (1920 px and
    960 px copies) and dated from EXIF, so "On this day" works.
 
-After editing `family.json`, run `npm run deploy` again. Lists, ticks and photos live in D1 and R2
+After editing `settings.json`, run `npm run deploy` again. Lists, ticks and photos live in D1 and R2
 and aren't touched by a deploy.
 
 ## Running it day to day
@@ -101,9 +110,9 @@ wrangler can't find `wrangler.jsonc` and stops with "Required Worker name missin
 | To change… | Edit | Then | Shows up |
 | --- | --- | --- | --- |
 | The dashboard code | the files in `dashboard/` | `npm run deploy`, then reload the frame | at the next reload |
-| People, stores, shopping catalog, weather location | `family.json` | `npm run deploy`, then reload the frame | at the next reload |
-| Calendars | `calendars.json` | `npm run calendars` | within ~15 min, no deploy |
-| Home Assistant devices | `home` in `family.json` | `npm run deploy` | within ~10 s of the reload |
+| People, stores, shopping catalog, weather location, bins | `settings.json` | `npm run deploy`, then reload the frame | at the next reload |
+| Calendars, dashboard key, Home Assistant token | `secrets.json` | `npm run secrets` | within ~15 min, no deploy |
+| Home Assistant devices | `home` in `settings.json` | `npm run deploy` | within ~10 s of the reload |
 | Home Assistant token | in Home Assistant | `npx wrangler secret put HA_TOKEN` | immediately |
 | The dashboard key | — | `npx wrangler secret put DASHBOARD_KEY`, then re-key every device | immediately |
 | Shopping list, photos | on a screen or phone | nothing | within 30 s on other screens |
@@ -133,7 +142,7 @@ npx wrangler rollback <version-id>
 
 ### Family and shopping
 
-All in `family.json`, then `npm run deploy`:
+All in `settings.json`, then `npm run deploy`:
 
 - **People:** `id`, `name`, `color`. Add `"ha": "person.x"` for the home/away display. Changing
   someone's `id` detaches their calendar mapping.
@@ -155,11 +164,11 @@ All in `family.json`, then `npm run deploy`:
 
 ### Calendars
 
-Each entry in `calendars.json` is a Google Calendar secret iCal link and the people it belongs to:
-`["sam"]`, `["laura", "sam"]` or `"all"`. After any change, upload the file again:
+Each entry in `CALENDARS` in `secrets.json` is a Google Calendar secret iCal link and the people it
+belongs to: `["sam"]`, `["laura", "sam"]` or `"all"`. After any change, upload the secrets again:
 
 ```bash
-npm run calendars
+npm run secrets
 ```
 
 The Worker re-reads calendars at most every 10 minutes and the frame asks every 5, so allow up to
@@ -226,7 +235,7 @@ The photos are copies of ones on your phone, so they don't need a separate backu
 
 The Worker runs in Cloudflare's network, not your house, so it needs an HTTPS address for Home
 Assistant: [Nabu Casa](https://www.nabucasa.com) remote access or a Cloudflare Tunnel. Only
-entities listed in `family.json` can be read or controlled through the dashboard.
+entities listed in `settings.json` can be read or controlled through the dashboard.
 
 ### Connect it
 
@@ -239,16 +248,16 @@ entities listed in `family.json` can be read or controlled through the dashboard
    for example "Frame". Leave **Administrator** off; it can still read states and switch lights,
    locks and scenes. Log in as that user, then open **Profile → Security → Long-lived access tokens →
    Create token**.
-3. **The token**, as a secret, from the `dashboard` folder:
+3. **The token**: put it in `secrets.json` as `HA_TOKEN`, then from the `dashboard` folder:
 
    ```bash
-   npx wrangler secret put HA_TOKEN
+   npm run secrets
    ```
 
-4. **The `home` section** in `family.json`:
+4. **The `home` section** in `settings.json`:
    - `url`: the address from step 1.
    - `rooms`: each with its `devices`, as `{ "entity": "light.kitchen", "name": "Kitchen" }`.
-   - optionally `climate`, `media`, `cameras`, `scenes` and `alerts`. See `family.example.json` and the
+   - optionally `climate`, `media`, `cameras`, `scenes` and `alerts`. See `settings.example.json` and the
      table below.
 
    Add `"ha": "person.sam"` to each person who has a `person.` entity. Find entity ids in
@@ -268,7 +277,7 @@ To turn Home Assistant off, remove the `home` section and deploy; the Home tab d
 
 ### What each entity becomes
 
-| `family.json` entry | Tile | Service calls |
+| `settings.json` entry | Tile | Service calls |
 | --- | --- | --- |
 | `light.*`, `switch.*` | Light (dimmable when the light supports brightness) | `turn_on` (`brightness_pct`), `turn_off` |
 | `cover.*` | Blind; `"garage": true` or `device_class: garage` makes it a garage door | `set_cover_position`, `open_cover`, `close_cover` |
@@ -301,7 +310,7 @@ reporting, or a low battery on one of them) and reads "All clear" otherwise. Tap
 A battery counts when Home Assistant has a `sensor.<name>_battery` whose `<name>` starts one of the
 alert entities (Zigbee sensors are usually named this way).
 
-`display.awayOffMinutes` (top level of `family.json`) turns the screen off once everyone Home
+`display.awayOffMinutes` (top level of `settings.json`) turns the screen off once everyone Home
 Assistant can place has been away that long, and back on when someone comes home, taps it, or an
 alert fires. People whose state is unknown are left out. With kiosk 1.2 the backlight goes down
 too; Android keeps running so the frame can wake by itself.
@@ -336,13 +345,14 @@ touched the screen for a minute.
 ## Local development
 
 ```bash
-cp family.example.json family.json                                   # then edit
-printf 'DASHBOARD_KEY=dev\nHA_TOKEN=...\n' > .dev.vars                 # calendars: keep in family.json locally
+cp settings.example.json settings.json                               # then edit
+cp secrets.example.json secrets.json                                 # then edit
+npm run secrets -- --local                                           # writes .dev.vars, uploads nothing
 npm run db:migrate:local
 npm run build && npx wrangler dev --port 8787
 ```
 
-Open `http://localhost:8787/?key=dev`. For live UI reloading, keep `wrangler dev` running and also
+Open `http://localhost:8787/?key=<DASHBOARD_KEY>`. For live UI reloading, keep `wrangler dev` running and also
 run `npm run dev`. Vite proxies `/api` to it, and the cookie works on both ports.
 
 ## Costs and limits

@@ -11,7 +11,7 @@
 
   function weather() {
     var w = App.weatherNow();
-    if (!w) return '<div class="h-wx-say"><b>No forecast yet.</b> Set <i>location</i> in family.json.</div>';
+    if (!w) return '<div class="h-wx-say"><b>No forecast yet.</b> Set <i>location</i> in settings.json.</div>';
     var hours = App.hourly(7);
     var tmin = Math.min.apply(null, hours.map(function (h) { return h.t; }));
     var tmax = Math.max.apply(null, hours.map(function (h) { return h.t; }));

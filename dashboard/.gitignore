@@ -2,6 +2,10 @@ node_modules
 dist
 .wrangler
 kiosk/build
-family.json
+# Private: settings has names and addresses, secrets has keys, tokens and calendar links.
+settings.json
+secrets.json
 .dev.vars
+# Old names, kept so a leftover copy is never committed
+family.json
 calendars.json

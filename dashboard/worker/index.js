@@ -6,7 +6,7 @@
 //   /api/photos    upload / serve / favourite / delete                      R2 + D1
 // Every /api route needs the dashboard key: open any page once with ?key=<DASHBOARD_KEY> and it is
 // kept in a cookie (the kiosk WebView keeps cookies across reboots).
-import RAW from '../family.json';
+import RAW from '../settings.json';
 import { parseIcs } from './ics.js';
 
 const DAY_MS = 864e5;
@@ -99,7 +99,7 @@ function cookieKey(req) {
 }
 
 // ------------------------------------------------------------------ bins
-// Collection dates come from the council's rotation in family.json ("every"), with bank-holiday
+// Collection dates come from the council's rotation in settings.json ("every"), with bank-holiday
 // changes listed in "moved" (usual date -> actual date, or null when it is skipped).
 function addYmd(ymd, n) {
   const d = new Date(ymd + 'T12:00:00Z');
@@ -197,13 +197,11 @@ async function clearGroceries(env, b) {
 
 // ------------------------------------------------------------------ calendar
 // The calendar links are private (anyone holding one can read that calendar), so they live in the
-// CALENDARS secret, which Cloudflare encrypts and never shows again, not in the deployed code.
-// `calendars` in family.json still works for local development.
+// CALENDARS secret (from secrets.json via `npm run secrets`), which Cloudflare encrypts and never
+// shows again, not in the deployed code. Locally, `npm run secrets -- --local` puts it in .dev.vars.
 function calendarList(env) {
-  if (env.CALENDARS) {
-    try { return JSON.parse(env.CALENDARS); } catch (e) { throw new Error('CALENDARS secret is not valid JSON'); }
-  }
-  return RAW.calendars || [];
+  if (!env.CALENDARS) return [];
+  try { return JSON.parse(env.CALENDARS); } catch (e) { throw new Error('CALENDARS secret is not valid JSON'); }
 }
 
 const CAL_TTL_MS = 10 * 60e3;
@@ -228,7 +226,7 @@ async function refreshCalendars(env, prev) {
       if (!cal || typeof cal.url !== 'string') throw new Error('no "url"');
       const wanted = [].concat(cal.people || []).indexOf('all') > -1 ? all : [].concat(cal.people || []);
       const unknown = wanted.filter((id) => all.indexOf(id) < 0);
-      if (unknown.length) notes.push('Calendar ' + n + ': unknown people ' + unknown.join(', ') + ' (ids must match family.json)');
+      if (unknown.length) notes.push('Calendar ' + n + ': unknown people ' + unknown.join(', ') + ' (ids must match settings.json)');
       const people = wanted.filter((id) => all.indexOf(id) > -1);
       const res = await fetch(cal.url.trim().replace(/^webcal:/, 'https:'), { headers: { 'user-agent': 'HomeHQ/1.0' } });
       if (!res.ok) throw new Error('HTTP ' + res.status + (res.status === 404 ? ' (link wrong, or reset in Google)' : ''));
@@ -328,7 +326,7 @@ async function forecast(env) {
   });
 }
 
-// Met Office warnings for one region (family.json "warnings": { "region": "yh", "areas": [...] }),
+// Met Office warnings for one region (settings.json "warnings": { "region": "yh", "areas": [...] }),
 // kept to those naming one of the areas. Times are UK local, as 'YYYY-MM-DDTHH:MM'.
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 function xmlText(s) {
@@ -467,7 +465,7 @@ function checksView(al, by) {
   };
 }
 
-// family.json home.energy: { "cost": "sensor.…" or a list to add up (money today, e.g. electricity
+// settings.json home.energy: { "cost": "sensor.…" or a list to add up (money today, e.g. electricity
 // and gas), "power": "sensor.…" (W or kW now), "high": 3000 (watts that count as a lot) }.
 // Either can be left out.
 function energyView(E, by) {

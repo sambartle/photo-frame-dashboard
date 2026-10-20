@@ -1,5 +1,5 @@
 {
-  "_readme": "Copy to family.json (gitignored) and edit. The Worker bundles it at deploy time; only names, colours and lists reach the browser, never the calendar links. Delete any section you don't use.",
+  "_readme": "Copy to settings.json (gitignored) and edit, then npm run deploy. The Worker bundles it at deploy time; only names, colours and lists reach the browser. Keys, tokens and calendar links go in secrets.json instead. Delete any section you don't use.",
 
   "timezone": "Europe/London",
   "location": { "lat": 51.5072, "lon": -0.1276, "units": "celsius" },
@@ -24,7 +24,7 @@
     { "id": "otto", "name": "Otto", "color": "#FFB000" }
   ],
 
-  "_calendars": "Calendar links are private: put them in calendars.json (see calendars.example.json), which is uploaded as the CALENDARS secret, not here.",
+  "_calendars": "Calendar links are private: they go in secrets.json (see secrets.example.json) with the other secrets, not here.",
 
   "shopping": {
     "stores": [{ "id": "grocer", "name": "Tesco" }, { "id": "bulk", "name": "Costco" }],
