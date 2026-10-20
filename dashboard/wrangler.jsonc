@@ -12,6 +12,8 @@
   "routes": [{ "pattern": "homehq.sambartle.co.uk", "custom_domain": true }],
   "workers_dev": false,
   "preview_urls": false,
+  // Every 5 minutes: notify (settings.json "frames") when a frame goes quiet or comes back.
+  "triggers": { "crons": ["*/5 * * * *"] },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

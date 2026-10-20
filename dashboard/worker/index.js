@@ -46,8 +46,12 @@ const CFG = (function () {
   const bins = RAW.bins && RAW.bins.every && RAW.bins.every.length ? RAW.bins : null;
   const warnings = RAW.warnings && RAW.warnings.region ? RAW.warnings : null;
   const display = RAW.display || {};
+  const frames = RAW.frames || {};
   return {
     tz, people, bins, warnings, display,
+    // Notify services (e.g. "notify.mobile_app_pixel") told when a frame goes quiet or comes back.
+    frameNotify: home && Array.isArray(frames.notify) ? frames.notify.filter((s) => /^notify\.\w+$/.test(s)) : [],
+    frameQuietMinutes: Math.max(20, frames.quietMinutes || 20),
     location: RAW.location, stores, catOrder, catalog, usuals: shop.usuals || [],
     home, rooms, devices,
     scenes: home ? (home.scenes || []).map((s) => ({ id: s.entity, name: s.name, icon: s.icon || 'bolt' })) : [],
@@ -136,6 +140,9 @@ async function setBinsOut(env, b) {
 
 // ------------------------------------------------------------------ frames
 // Each wall display checks in every 5 minutes; the list shows when one has gone quiet.
+// A frame's id lives in its browser storage, which belongs to one address, so after a move to a
+// new address (or cleared storage) it checks in as a new frame. Its old entry, same name and quiet
+// for 15 minutes, is removed then. Entries silent for 30 days expire on their own.
 async function frameBeat(env, b) {
   const id = str(b.id, 40);
   if (!/^[a-z0-9]{6,40}$/.test(id)) return bad('id required');
@@ -146,11 +153,51 @@ async function frameBeat(env, b) {
   };
   await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
     .bind('frame:' + id, JSON.stringify(row), Date.now() + 30 * 864e5).run();
-  return json({ ok: true });
+  const stale = (await listFrames(env)).filter((f) => f.id !== id && f.name === row.name && row.seen - f.seen >= 15 * 60e3);
+  if (stale.length) await env.DB.batch(stale.map((f) => env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('frame:' + f.id)));
+  return json({ ok: true, replaced: stale.length });
 }
 async function listFrames(env) {
   const rows = await env.DB.prepare("SELECT value FROM cache WHERE key LIKE 'frame:%' AND expires > ?").bind(Date.now()).all();
   return rows.results.map((r) => JSON.parse(r.value)).sort((a, b) => (a.name < b.name ? -1 : 1));
+}
+
+// Every 5 minutes (cron in wrangler.jsonc): tell Home Assistant's notify services when a frame has
+// been quiet for frames.quietMinutes (20 at least, so a frame that just moved address is tidied
+// up first, see frameBeat) and again when it's back. Both use one Android tag per frame, so
+// "back" replaces "offline" in the notification shade. Sent once per outage.
+function clock(ms) {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: CFG.tz, hour: '2-digit', minute: '2-digit' }).format(new Date(ms));
+}
+function duration(ms) {
+  const m = Math.round(ms / 60000);
+  return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
+}
+async function notify(env, title, message, tag) {
+  await Promise.all(CFG.frameNotify.map((s) => haService(env, 'notify', s.split('.')[1], { title, message, data: { tag, group: 'homehq' } })));
+}
+async function checkFrames(env) {
+  if (!CFG.frameNotify.length || !env.HA_TOKEN) return;
+  const now = Date.now(), frames = await listFrames(env);
+  const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('frame-alerts').first();
+  const alerted = row ? JSON.parse(row.value) : {}; // frame id -> when it was last heard from before going quiet
+  let changed = false;
+  for (const f of frames) {
+    const quiet = now - f.seen >= CFG.frameQuietMinutes * 60e3;
+    if (quiet && !alerted[f.id]) {
+      await notify(env, f.name + ' frame is offline', 'Last checked in at ' + clock(f.seen) + '. Check it’s switched on and on Wi-Fi.', 'homehq-frame-' + f.id);
+      alerted[f.id] = f.seen;
+      changed = true;
+    } else if (!quiet && alerted[f.id]) {
+      await notify(env, f.name + ' frame is back', 'Offline for about ' + duration(now - alerted[f.id]) + '.', 'homehq-frame-' + f.id);
+      delete alerted[f.id];
+      changed = true;
+    }
+  }
+  // Forget frames that left the list (renamed address, expired) without a "back" message.
+  Object.keys(alerted).forEach((id) => { if (!frames.some((f) => f.id === id)) { delete alerted[id]; changed = true; } });
+  if (changed) await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+    .bind('frame-alerts', JSON.stringify(alerted), now + 365 * 864e5).run();
 }
 
 // ------------------------------------------------------------------ state (shopping, photos, bins)
@@ -574,6 +621,12 @@ async function api(req, env, url) {
   if (p === '/bins/out' && m === 'POST') return setBinsOut(env, await body(req));
   if (p === '/frames' && m === 'POST') return frameBeat(env, await body(req));
   if (p === '/frames' && m === 'GET') return json(await listFrames(env));
+  // Display controls test: one notification to every frames.notify service.
+  if (p === '/frames/test-notify' && m === 'POST') {
+    if (!CFG.frameNotify.length) return bad('Add frames.notify to settings.json first', 404);
+    await notify(env, 'Test from Home HQ', 'Frame notifications reach this device.', 'homehq-frame-test');
+    return json({ ok: true, sent: CFG.frameNotify.length });
+  }
   if ((r = /^\/frames\/([a-z0-9]{6,40})$/.exec(p)) && m === 'DELETE') {
     await env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('frame:' + r[1]).run();
     return json({ ok: true });
@@ -607,6 +660,9 @@ async function api(req, env, url) {
 }
 
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(checkFrames(env).catch((err) => console.error('checkFrames', err)));
+  },
   async fetch(req, env) {
     const url = new URL(req.url);
     if (!env.DASHBOARD_KEY) return new Response('Set the DASHBOARD_KEY secret first: npx wrangler secret put DASHBOARD_KEY', { status: 500 });

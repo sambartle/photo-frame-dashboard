@@ -79,9 +79,11 @@
     }).catch(function () {});
   }
   App.frameId = frameId;
-  // Only wall displays check in: the phone page has its own script, and a laptop preview
-  // (?wall on a computer) would otherwise show up as a frame.
-  if (K || /Android/.test(navigator.userAgent)) {
+  // Only frames check in: the kiosk app (1.2+), or a screen named with ?frame= on purpose. A
+  // phone, tablet or laptop showing the wall view stays out, so it never shows up as a quiet frame.
+  var named = /[?&]frame=/.test(location.search);
+  if (!named) try { named = !!localStorage.getItem('hq-frame-name'); } catch (e) {}
+  if (K || named) {
     App.on('ready', function () { setTimeout(beat, 5000); setInterval(beat, 5 * 60e3); });
   }
 

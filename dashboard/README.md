@@ -339,8 +339,31 @@ data, and check what's connected.
 
 **Frames** in the display controls lists every wall display that has checked in (each does every
 5 minutes): its dashboard and kiosk versions, Wi-Fi signal (kiosk 1.2) and when it was last seen.
-One quiet for 15 minutes turns red there and shows a warning on the phone page. A frame is named
-after its device model; add `&frame=Kitchen` to its address once to name it yourself.
+One quiet for 15 minutes turns red there and shows a warning on the phone page. Only the kiosk
+app (1.2 or later) checks in, so a phone or laptop showing the wall view never appears in the list.
+
+**Naming a frame.** A frame is listed under its device model ("C-2") until you name it. Put the
+name in the address the kiosk starts from, after the key:
+
+```bash
+scripts/set-kiosk-url.sh 'https://<your address>/?key=<DASHBOARD_KEY>&frame=Kitchen'
+```
+
+The kiosk opens that address at every start, so the name comes back even if the frame's storage
+is cleared. A name has letters, digits and spaces, up to 40 characters; write a space as `%20`
+(`&frame=Living%20room`). Renaming updates the frame's entry at its next check-in. After a move to
+a new address a frame checks in as new (its id is stored per address); its old entry, same name and
+quiet for 15 minutes, is removed then. Any other browser or screen can be listed the same way:
+open its address once with `?frame=<name>`. Entries silent for 30 days drop off by themselves.
+
+**Phone notifications when a frame goes quiet** (needs Home Assistant): list Home Assistant notify
+services in `settings.json`, for example `"frames": { "notify": ["notify.mobile_app_pixel"] }`
+(Home Assistant: **Developer tools → Actions**, search `notify.mobile_app`). Every 5 minutes the
+Worker checks the list; a frame quiet for `quietMinutes` (20 by default, never less) gets one
+"offline" notification and a "back" one when it checks in again, which replaces it on Android. It
+goes through the same `HA_TOKEN` as everything else; a non-admin user may call notify. If the
+house's internet is down, the Worker can't reach Home Assistant either, so that outage goes
+unreported. **Test alerts → Frame notification** in the display controls sends a test.
 
 After a deploy, frames reload themselves within about six minutes, waiting until nobody has
 touched the screen for a minute.

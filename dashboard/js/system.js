@@ -152,6 +152,7 @@
     var t = D.hasHome ? [['doorbell', 'Doorbell'], ['leak', 'Water leak'], ['smoke', 'Smoke'], ['garage', 'Garage open']] : [];
     t.push(['weather', 'Weather warning']);
     if (D.bins && D.bins.next.length) t.push(['bins', 'Bins out tonight']);
+    if (D.hasHome) t.push(['notify', 'Frame notification (sends one)']);
     return t;
   }
   function status() {
@@ -204,7 +205,11 @@
       // Previews only: the leak valve and door lock still need a deliberate hold to act, and the
       // weather and bins tests stay on this screen for two minutes without saving anything.
       ({ doorbell: App.doorbell, leak: App.leak, smoke: function () { App.smoke([{ name: 'Test: Landing', co: false }]); },
-        garage: function () { App.garageOpenAlert(15); }, weather: App.testWarning, bins: App.testBins })[which]();
+        garage: function () { App.garageOpenAlert(15); }, weather: App.testWarning, bins: App.testBins,
+        notify: function () {
+          App.api('POST', '/frames/test-notify').then(function (r) { App.toast('Test sent to ' + r.sent + (r.sent === 1 ? ' device' : ' devices'), { icon: 'check' }); },
+            function (err) { App.toast(App.esc(err.message), { tone: 'error', icon: 'bolt' }); });
+        } })[which]();
       return;
     }
     if (b.hasAttribute('data-reload')) {
