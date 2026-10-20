@@ -296,7 +296,7 @@ async function refreshCalendars(env, prev) {
     else byKey.set(k, Object.assign({}, e, { people: e.people.slice() }));
   }));
   return {
-    events: Array.from(byKey.values()).map((e) => { delete e.key; return e; }),
+    events: Array.from(byKey.values()), // keep key (UID|start): getCalendar matches frame events by it
     errors: results.reduce((a, r) => a.concat(r.notes), []),
     checked: Date.now(),
   };
@@ -397,12 +397,68 @@ async function getCalendar(env) {
     await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
       .bind('calendar', JSON.stringify(feed), Date.now() + CAL_TTL_MS).run();
   }
-  const local = await env.DB.prepare('SELECT id, title, people, start, end FROM events WHERE end > ?').bind(Date.now() - 45 * DAY_MS).all();
-  const events = feed.events.map((e) => Object.assign({}, e)).concat(local.results.map((e) => ({
+  const local = await env.DB.prepare('SELECT id, title, people, start, end, gid FROM events WHERE end > ?').bind(Date.now() - 45 * DAY_MS).all();
+  // A frame event written to Google comes back in the iCal feed as UID <gid>@google.com; from then
+  // on the feed's copy is shown and this one is hidden.
+  const inFeed = (gid) => feed.events.some((f) => f.key && f.key.indexOf(gid + '@google.com|') === 0);
+  const events = feed.events.map((e) => { const c = Object.assign({}, e); delete c.key; return c; }).concat(local.results.filter((e) => !(e.gid && inFeed(e.gid))).map((e) => ({
     id: e.id, title: e.title, people: JSON.parse(e.people), start: new Date(e.start).toISOString(), end: new Date(e.end).toISOString(), local: true,
+    google: !!e.gid,
   })));
   await addDrives(env, events).catch((err) => console.error('addDrives', err));
   return { events, errors: feed.errors, checked: feed.checked };
+}
+
+// ------------------------------------------------------------------ writing to Google Calendar
+// Events added on the frame are also written to Google with a service account (secrets.json
+// GOOGLE_SERVICE_ACCOUNT, the JSON key file) that each calendar is shared with ("Make changes to
+// events"). Which calendar: the CALENDARS entry for exactly these people ("all" for everyone),
+// else the "all" one. Its id is the part of the secret iCal link after /ical/. The frame keeps its
+// own copy until the iCal feed carries the event, then hides it (see getCalendar).
+let googleAuth = null; // { token, exp }, reused while this Worker instance lives
+function b64url(bytes) {
+  let bin = '';
+  new Uint8Array(bytes).forEach((c) => { bin += String.fromCharCode(c); });
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function googleToken(env) {
+  if (googleAuth && googleAuth.exp > Date.now() + 60e3) return googleAuth.token;
+  const sa = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT), now = Math.floor(Date.now() / 1000);
+  const part = (o) => b64url(enc.encode(JSON.stringify(o)));
+  const unsigned = part({ alg: 'RS256', typ: 'JWT' }) + '.' + part({
+    iss: sa.client_email, scope: 'https://www.googleapis.com/auth/calendar.events',
+    aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
+  });
+  const der = Uint8Array.from(atob(sa.private_key.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '')), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey('pkcs8', der, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  const jwt = unsigned + '.' + b64url(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, enc.encode(unsigned)));
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + jwt,
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.access_token) throw new Error('Google sign-in failed (' + (j.error_description || j.error || 'HTTP ' + res.status) + ')');
+  googleAuth = { token: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 };
+  return googleAuth.token;
+}
+function calendarFor(env, people) {
+  const list = calendarList(env).map((c) => {
+    const m = /\/ical\/([^/]+)\//.exec(c.url || '');
+    return { id: m ? decodeURIComponent(m[1]) : null, people: c.people === 'all' ? 'all' : [].concat(c.people || []) };
+  }).filter((c) => c.id);
+  const everyone = people.length >= CFG.people.length;
+  const exact = list.find((c) => (c.people === 'all' ? everyone : c.people.length === people.length && people.every((p) => c.people.indexOf(p) > -1)));
+  return (exact || list.find((c) => c.people === 'all') || {}).id || null;
+}
+async function google(env, method, path, body) {
+  const res = await fetch('https://www.googleapis.com/calendar/v3' + path, {
+    method, headers: { authorization: 'Bearer ' + await googleToken(env), 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204 || res.status === 404 || res.status === 410) return {}; // deleted, or gone already
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((j.error && j.error.message) || 'HTTP ' + res.status);
+  return j;
 }
 
 async function addEvent(env, b) {
@@ -412,6 +468,30 @@ async function addEvent(env, b) {
   if (!id || !title || !(end > start) || !people.length) return bad('id, title, people, start < end required');
   await env.DB.prepare('INSERT OR REPLACE INTO events (id, title, people, start, end, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .bind(id, title, JSON.stringify(people), start, end, Date.now()).run();
+  if (!env.GOOGLE_SERVICE_ACCOUNT) return json({ ok: true });
+  const cal = calendarFor(env, people);
+  if (!cal) return json({ ok: true, google: false, error: 'no calendar for these people in CALENDARS' });
+  try {
+    const g = await google(env, 'POST', '/calendars/' + encodeURIComponent(cal) + '/events', {
+      summary: title,
+      start: { dateTime: new Date(start).toISOString(), timeZone: CFG.tz },
+      end: { dateTime: new Date(end).toISOString(), timeZone: CFG.tz },
+      description: 'Added on the Home HQ frame',
+    });
+    await env.DB.prepare('UPDATE events SET gcal = ?, gid = ? WHERE id = ?').bind(cal, g.id, id).run();
+    return json({ ok: true, google: true });
+  } catch (err) {
+    return json({ ok: true, google: false, error: String(err.message || err) });
+  }
+}
+async function deleteEvent(env, id) {
+  const row = await env.DB.prepare('SELECT gcal, gid FROM events WHERE id = ?').bind(id).first();
+  if (row && row.gid && env.GOOGLE_SERVICE_ACCOUNT) {
+    try { await google(env, 'DELETE', '/calendars/' + encodeURIComponent(row.gcal) + '/events/' + encodeURIComponent(row.gid)); } catch (err) {
+      return bad('Couldn’t remove it from Google Calendar: ' + (err.message || err), 502); // keep it here so it can be tried again
+    }
+  }
+  await env.DB.prepare('DELETE FROM events WHERE id = ?').bind(id).run();
   return json({ ok: true });
 }
 
@@ -699,10 +779,7 @@ async function api(req, env, url) {
   if (p === '/calendar' && m === 'GET') return json(await getCalendar(env));
   if (p === '/weather' && m === 'GET') return json(await getWeather(env));
   if (p === '/events' && m === 'POST') return addEvent(env, await body(req));
-  if ((r = /^\/events\/([\w-]+)$/.exec(p)) && m === 'DELETE') {
-    await env.DB.prepare('DELETE FROM events WHERE id = ?').bind(r[1]).run();
-    return json({ ok: true });
-  }
+  if ((r = /^\/events\/([\w-]+)$/.exec(p)) && m === 'DELETE') return deleteEvent(env, r[1]);
   if (p === '/bins/out' && m === 'POST') return setBinsOut(env, await body(req));
   if (p === '/frames' && m === 'POST') return frameBeat(env, await body(req));
   if (p === '/frames' && m === 'GET') return json(await listFrames(env));

@@ -271,7 +271,7 @@
         return '<span class="chip" style="' + App.pstyle(x) + '">' + App.avatar(x, 32) + x.name + '</span>';
       }).join('') + '</div></div>' +
       (e.notes ? '<div class="evs-notes serif">“' + App.esc(e.notes) + '”</div>' : '') +
-      (e.local ? '<div class="sheet-actions"><span class="label">Added on this display</span><button class="btn btn--ghost" data-del>Remove</button></div>' : '') +
+      (e.local ? '<div class="sheet-actions"><span class="label">Added on this display' + (e.google ? ' · in Google Calendar' : '') + '</span><button class="btn btn--ghost" data-del>Remove</button></div>' : '') +
       '</div></div>', {
       cls: 'sheet--event',
       onMount: function (s, close) {
@@ -281,8 +281,8 @@
           D.events = D.events.filter(function (x) { return x !== e; });
           if (V.el) render();
           App.emit('data');
-          App.write('calendar', 'DELETE', '/events/' + e.id);
-          App.toast('Removed <b>' + App.esc(e.title) + '</b>', { icon: 'calendar' });
+          App.write('calendar', 'DELETE', '/events/' + e.id).catch(function () {}); // a failure shows its own toast and puts it back
+          App.toast('Removed <b>' + App.esc(e.title) + '</b>' + (e.google ? ' · from Google Calendar too' : ''), { icon: 'calendar' });
         };
       }
     });
@@ -351,7 +351,11 @@
             start.setHours(+p[0], +p[1]);
             var e = { id: App.uid(), title: title, people: who, start: start, end: new Date(+start + st.dur * 60000), local: true };
             D.events.push(e);
-            App.write('calendar', 'POST', '/events', { id: e.id, title: e.title, people: e.people, start: +e.start, end: +e.end });
+            App.write('calendar', 'POST', '/events', { id: e.id, title: e.title, people: e.people, start: +e.start, end: +e.end }).then(function (r) {
+              // Written to Google Calendar too, unless that isn't set up or Google said no.
+              if (r && r.google) e.google = true;
+              else if (r && r.google === false) App.toast('Saved on the frame only · Google Calendar: ' + App.esc(r.error || 'not reachable'), { tone: 'error', icon: 'calendar', ms: 6000 });
+            }, function () {});
             close();
             V.date = App.dayStart(start); V.mode = V.mode === 'month' ? 'day' : V.mode; V.scroll = null;
             render();
@@ -359,7 +363,7 @@
             App.toast('Added <b>' + App.esc(title) + '</b> · ' + App.fmt.rel(start) + ' ' + App.fmt.time(start), {
               icon: 'calendar', undo: function () {
                 D.events.splice(D.events.indexOf(e), 1); render(); App.emit('data');
-                App.write('calendar', 'DELETE', '/events/' + e.id);
+                App.write('calendar', 'DELETE', '/events/' + e.id).catch(function () {});
               }
             });
           }

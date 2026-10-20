@@ -211,10 +211,32 @@ A typical family calendar needs about a thousand lookups a month, inside the mon
 for the Routes API at the time of writing; check Google's current pricing.
 
 Add and change events in the Google Calendar app as usual; the frame follows within the same window.
-Events added with **+** on the frame stay on the dashboard and never reach Google. (Planned: writing
-them to Google through a service account the calendars are shared with.) To remove a
-calendar, delete its line and upload again. If a link may have leaked, also press **Reset** next to
+To remove a calendar, delete its line and upload again. If a link may have leaked, also press **Reset** next to
 it in Google Calendar's settings, which kills the old link, and put the new one in.
+
+**Events added on the frame go to Google Calendar too** (optional). The Worker writes them with a
+Google **service account**: a separate robot account in your Google Cloud project, signed in with
+its own key through Google's documented server-to-server flow, that can only touch the calendars
+you share with it. An event for everyone goes to the `"all"` calendar in `CALENDARS`, one for a
+single person to that person's calendar (or the `"all"` one if they have none). The frame shows it
+at once; when Google's iCal feed carries it, the feed's copy takes over. **Remove** or **Undo** on
+the frame deletes it from Google as well. If Google refuses (calendar not shared, no key, offline),
+the event stays on the frame and a message says so. A service account can't send invitations.
+
+To set it up, once:
+
+1. In the [Google Cloud console](https://console.cloud.google.com), in the same project as the Maps
+   key (or a new one): **APIs & Services → Library**, enable the **Google Calendar API**.
+2. **IAM & Admin → Service Accounts → Create service account**. Name it, for example `homehq`;
+   skip the optional roles and access steps (it needs no project permissions). Open it, then
+   **Keys → Add key → Create new key → JSON**. A `.json` file downloads.
+3. Paste that file's whole contents into `secrets.json` as the value of `GOOGLE_SERVICE_ACCOUNT`
+   (the object, not a string), delete the downloaded file, and run `npm run secrets`. It prints the
+   service account's email address.
+4. In [Google Calendar](https://calendar.google.com), for **each calendar in `CALENDARS`**: the
+   calendar's ⋮ menu → **Settings and sharing → Shared with → Add people and groups**, paste the
+   service account's email, choose **Make changes to events**, and **Send**.
+5. Test: add an event with **+** on the frame; it appears in the Google Calendar app within seconds.
 
 ### Connecting devices
 
