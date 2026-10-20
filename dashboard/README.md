@@ -230,6 +230,14 @@ To set it up, once:
 2. **IAM & Admin → Service Accounts → Create service account**. Name it, for example `homehq`;
    skip the optional roles and access steps (it needs no project permissions). Open it, then
    **Keys → Add key → Create new key → JSON**. A `.json` file downloads.
+   If Google says **"Service account key creation is disabled"**, your Google Cloud account belongs
+   to an organisation (your own domain) with the secure-by-default policy
+   `iam.disableServiceAccountKeyCreation`. As the organisation's admin: in the organisation's
+   **IAM**, give yourself **Organisation Policy Administrator**; then in this project, **IAM & Admin
+   → Organisation policies → Disable service account key creation → Manage policy → Override
+   parent's policy**, enforcement **Off**, and create the key. Afterwards set it back to **Inherit
+   parent's policy**: the key keeps working, and no new ones can be made. Without admin rights,
+   make the project under a personal Google account instead, which has no such policy.
 3. Paste that file's whole contents into `secrets.json` as the value of `GOOGLE_SERVICE_ACCOUNT`
    (the object, not a string), delete the downloaded file, and run `npm run secrets`. It prints the
    service account's email address.
