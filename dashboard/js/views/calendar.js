@@ -299,26 +299,30 @@
   }
 
   function addSheet() {
-    var now = App.now();
-    var st = { who: [], day: 0, time: '15:30', dur: 60, title: '' };
+    var now = App.now(), today = App.dayStart(now);
+    var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    var ymd = function (d) { return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()); };
+    // Starts at the next whole hour (or 8 AM if that's past 11 PM).
+    var next = now.getHours() + 1;
+    var st = { who: [], date: today, time: p2(next > 23 ? 8 : next) + ':00', dur: 60 };
     var days = [0, 1, 2, 3, 4];
-    var times = [['08:00', '8 AM'], ['12:00', 'Noon'], ['15:30', '3:30 PM'], ['16:30', '4:30 PM'], ['18:00', '6 PM'], ['19:30', '7:30 PM']];
-    var ideas = ['Soccer', 'Playdate', 'Dentist', 'Dinner out', 'Swim', 'Birthday party'];
     App.sheet(
       '<div class="sheet-pad add">' +
       '<div class="label">New event</div>' +
       '<input class="big-input serif" placeholder="What’s happening?" data-f="title">' +
-      '<div class="chips">' + ideas.map(function (i) { return '<button class="chip chip--ghost" data-idea="' + i + '">' + i + '</button>'; }).join('') + '</div>' +
       '<div class="label">Who</div><div class="add-who">' + D.people.map(function (p) {
         return '<button class="who-btn" data-who="' + p.id + '" style="' + App.pstyle(p) + '">' + App.avatar(p, 56) + '<span>' + p.name + '</span></button>';
       }).join('') + '<button class="who-btn" data-who="all" style="' + App.pstyle(D.family) + '">' + App.avatar(D.family, 56) + '<span>Everyone</span></button></div>' +
       '<div class="add-row"><div><div class="label">When</div><div class="chips">' + days.map(function (i) {
         var d = App.addDays(now, i);
         return '<button class="chip' + (i === 0 ? ' is-on' : '') + '" data-dayi="' + i + '">' + (i < 2 ? App.fmt.rel(d) : App.fmt.dayShort(d) + ' ' + d.getDate()) + '</button>';
-      }).join('') + '</div></div></div>' +
-      '<div class="add-row"><div><div class="label">Time</div><div class="chips">' + times.map(function (t) {
-        return '<button class="chip' + (t[0] === st.time ? ' is-on' : '') + '" data-time="' + t[0] + '">' + t[1] + '</button>';
-      }).join('') + '</div></div>' +
+      }).join('') +
+      // Any other date: the system date picker. It always shows the chosen date, chips included.
+      '<label class="chip chip-pick">' + App.icon('calendar', 22) + '<input type="date" data-f="date" min="' + ymd(today) + '" value="' + ymd(today) + '" aria-label="Pick a date"></label>' +
+      '</div></div></div>' +
+      '<div class="add-row"><div><div class="label">Time</div><div class="chips">' +
+      '<label class="chip chip-pick">' + App.icon('clock', 22) + '<input type="time" data-f="time" value="' + st.time + '" aria-label="Pick a time"></label>' +
+      '</div></div>' +
       '<div><div class="label">Length</div><div class="chips">' + [[30, '30m'], [60, '1h'], [120, '2h']].map(function (t) {
         return '<button class="chip' + (t[0] === st.dur ? ' is-on' : '') + '" data-dur="' + t[0] + '">' + t[1] + '</button>';
       }).join('') + '</div></div></div>' +
@@ -326,11 +330,25 @@
       '</div>', {
       cls: 'sheet--wide',
       onMount: function (s, close) {
-        var input = s.querySelector('[data-f=title]');
+        var input = s.querySelector('[data-f=title]'), dateIn = s.querySelector('[data-f=date]'), timeIn = s.querySelector('[data-f=time]');
+        var dayChips = function () {
+          App.$$('[data-dayi]', s).forEach(function (b) { b.classList.toggle('is-on', App.sameDay(App.addDays(today, +b.dataset.dayi), st.date)); });
+          dateIn.parentNode.classList.toggle('is-on', !App.$$('[data-dayi]', s).some(function (b) { return b.classList.contains('is-on'); }));
+        };
+        dateIn.addEventListener('change', function () {
+          if (!dateIn.value) { dateIn.value = ymd(st.date); return; }
+          var a = dateIn.value.split('-');
+          st.date = new Date(+a[0], +a[1] - 1, +a[2]);
+          dayChips();
+        });
+        timeIn.addEventListener('change', function () { if (timeIn.value) st.time = timeIn.value; else timeIn.value = st.time; });
+        // Tapping anywhere on a picker chip opens the picker, not only on its text.
+        App.$$('.chip-pick', s).forEach(function (l) {
+          l.addEventListener('click', function (ev) { var i = l.querySelector('input'); if (ev.target !== i && i.showPicker) { ev.preventDefault(); try { i.showPicker(); } catch (e) {} } });
+        });
         s.addEventListener('click', function (ev) {
           var t = ev.target.closest('button');
           if (!t) return;
-          if (t.dataset.idea) { input.value = t.dataset.idea; }
           if (t.dataset.who) {
             if (t.dataset.who === 'all') st.who = st.who.length === D.people.length ? [] : D.ALL.slice();
             else { var i = st.who.indexOf(t.dataset.who); if (i > -1) st.who.splice(i, 1); else st.who.push(t.dataset.who); }
@@ -338,17 +356,17 @@
               b.classList.toggle('is-on', b.dataset.who === 'all' ? st.who.length === D.people.length : st.who.indexOf(b.dataset.who) > -1);
             });
           }
-          ['dayi', 'time', 'dur'].forEach(function (k) {
-            if (t.dataset[k] != null) {
-              App.$$('[data-' + k + ']', s).forEach(function (b) { b.classList.toggle('is-on', b === t); });
-              if (k === 'dayi') st.day = +t.dataset.dayi; else if (k === 'dur') st.dur = +t.dataset.dur; else st.time = t.dataset.time;
-            }
-          });
+          if (t.dataset.dayi != null) { st.date = App.addDays(today, +t.dataset.dayi); dateIn.value = ymd(st.date); dayChips(); }
+          if (t.dataset.dur != null) {
+            App.$$('[data-dur]', s).forEach(function (b) { b.classList.toggle('is-on', b === t); });
+            st.dur = +t.dataset.dur;
+          }
           if (t.hasAttribute('data-save')) {
-            var title = input.value.trim() || 'New event';
+            var title = input.value.trim();
+            if (!title) { input.focus(); App.toast('Type what’s happening', { icon: 'calendar', ms: 2500 }); return; }
             var who = st.who.length ? st.who.slice() : D.ALL.slice();
-            var start = App.addDays(App.dayStart(now), st.day), p = st.time.split(':');
-            start.setHours(+p[0], +p[1]);
+            var start = new Date(st.date), p = st.time.split(':');
+            start.setHours(+p[0], +p[1], 0, 0);
             var e = { id: App.uid(), title: title, people: who, start: start, end: new Date(+start + st.dur * 60000), local: true };
             D.events.push(e);
             App.write('calendar', 'POST', '/events', { id: e.id, title: e.title, people: e.people, start: +e.start, end: +e.end }).then(function (r) {

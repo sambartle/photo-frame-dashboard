@@ -178,6 +178,14 @@
 .add-who--big { justify-content: space-between; }
 .add-who--big .who-btn { font-size: 22px; padding: 14px 18px; }
 .add-row { display: flex; gap: 36px; }
+/* Date and time pickers dressed as chips; the input itself opens the system picker */
+.chip-pick { position: relative; cursor: pointer; }
+.chip-pick input {
+  font: inherit; font-size: 18px; font-weight: 700; color: inherit; background: transparent; border: 0;
+  outline: none; padding: 0; min-width: 0;
+}
+.chip-pick input::-webkit-calendar-picker-indicator { display: none; }
+.chip-pick.is-on input { color: var(--paper); }
 
 .more-list { display: flex; flex-direction: column; gap: 8px; }
 .more-row { display: flex; align-items: center; gap: 14px; min-height: 72px; padding: 0 20px; border-radius: 14px; background: rgb(var(--c-rgb) / .12); }
