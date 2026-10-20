@@ -2,17 +2,20 @@
 (function () {
   'use strict';
   var D = window.DATA;
-  var PX = 72, START = 6, END = 23; // 72px per hour, 6 AM → 11 PM
+  // The time grid covers the whole day (72px per hour) with a little room above midnight and below
+  // the next, so events at the very start or running past the end aren't squashed against an edge.
+  // It opens scrolled to 6 AM (see render); scroll up for earlier.
+  var PX = 72, START = 0, END = 24, PAD = 18, OPEN_AT = 6;
   var V = { mode: 'day', date: null, el: null, scroll: null };
   var MODES = [['day', 'Today'], ['3day', '3 Day'], ['week', 'Week'], ['month', 'Month']];
 
-  function y(d) { return ((d.getHours() + d.getMinutes() / 60) - START) * PX; }
+  function y(d) { return PAD + ((d.getHours() + d.getMinutes() / 60) - START) * PX; }
   function clampTop(e, day) {
     var s = App.dayStart(day);
     var a = e.start < s ? new Date(+s + START * 36e5) : e.start;
     var endOfDay = new Date(+s + END * 36e5);
-    var b = e.end > endOfDay ? endOfDay : e.end;
-    return { top: Math.max(0, y(a)), h: Math.max(24, y(b) - Math.max(0, y(a)) - 3) };
+    var top = y(a), bottom = e.end >= endOfDay ? PAD + (END - START) * PX : y(e.end); // past midnight: to the grid's end
+    return { top: top, h: Math.max(24, bottom - top - 3) };
   }
 
   // Overlap layout → [{e, col, cols}] (cols capped at 2, extra returned as overflow groups)
@@ -45,7 +48,9 @@
     opts = opts || {};
     var now = App.now();
     var p = opts.color || App.evColor(e);
-    var mins = (e.end - e.start) / 60000;
+    // Short layout by the time shown, not the event's length: one cut off at midnight may be tiny.
+    var shown = /height:\s*([\d.]+)px/.exec(style || '');
+    var mins = Math.min((e.end - e.start) / 60000, shown ? +shown[1] / PX * 60 : Infinity);
     var cls = 'ev' + (e.end <= now ? ' is-past' : '') + (e.start <= now && e.end > now ? ' is-now' : '') + (mins < 45 ? ' is-short' : '') + (App.isFamily(e) ? ' is-family' : '') + (opts.half ? ' is-half' : '');
     var others = opts.lane ? e.people.filter(function (id) { return id !== opts.lane; }) : (e.people.length > 1 && !App.isFamily(e) ? e.people : []);
     var j = App.journey(e);
@@ -73,14 +78,14 @@
   function hoursCol() {
     var h = '';
     for (var i = START; i <= END; i++) {
-      h += '<div class="hr" style="top:' + (i - START) * PX + 'px"><span>' + (i === 12 ? 'Noon' : (i % 12 || 12) + (i < 12 ? ' AM' : ' PM')) + '</span></div>';
+      h += '<div class="hr" style="top:' + (PAD + (i - START) * PX) + 'px"><span>' + (i === 12 ? 'Noon' : i % 24 === 0 ? 'Midnight' : (i % 12 || 12) + (i < 12 ? ' AM' : ' PM')) + '</span></div>';
     }
     return h;
   }
   function nowLine(days) {
     var now = App.now(), idx = -1;
     days.forEach(function (d, i) { if (App.sameDay(d, now)) idx = i; });
-    if (idx < 0 || now.getHours() < START || now.getHours() >= END) return '';
+    if (idx < 0) return '';
     return '<div class="now-line" style="top:' + y(now) + 'px"><span class="num">' + App.fmt.time(now, false) + '</span></div>';
   }
 
@@ -98,7 +103,7 @@
       return '<button class="ad' + (e.start < s ? ' ad--cont' : '') + '" data-ev="' + e.id + '" style="grid-column:' + col + ';' + App.pstyle(App.evColor(e)) + '">' +
         (e.start < s ? App.icon('left', 16) : '') + App.esc(e.title) + (spanDays > 1 ? ' <small>Day ' + dayN + ' of ' + spanDays + '</small>' : '') + '</button>';
     }).join('') + '</div></div>' : '';
-    var grid = '<div class="grid-scroll"><div class="grid" style="height:' + (END - START) * PX + 'px">' +
+    var grid = '<div class="grid-scroll"><div class="grid" style="height:' + ((END - START) * PX + 2 * PAD) + 'px">' +
       '<div class="hours">' + hoursCol() + '</div>' +
       '<div class="lanes" style="' + cols + '">' + D.people.map(function (p) {
         var list = App.timedOn(day, p.id).filter(function (e) { return !App.isFamily(e); });
@@ -133,7 +138,7 @@
           (e.start < s0 ? App.icon('left', 16) : '') + App.esc(e.title) + (e.end > s3 ? App.icon('right', 16) : '') + '</button>';
       }).join('') + '</div></div>';
     }
-    var grid = '<div class="grid-scroll"><div class="grid" style="height:' + (END - START) * PX + 'px">' +
+    var grid = '<div class="grid-scroll"><div class="grid" style="height:' + ((END - START) * PX + 2 * PAD) + 'px">' +
       '<div class="hours">' + hoursCol() + '</div>' +
       '<div class="lanes lanes--3">' + days.map(function (d) {
         var save = V.date; V.date = d;
@@ -209,7 +214,10 @@
     var sc = V.el.querySelector('.grid-scroll');
     if (sc) {
       var now = App.now();
-      sc.scrollTop = V.scroll != null ? V.scroll : Math.max(0, y(now) - 170);
+      // Opens at 6 AM; on today, later in the day, at a couple of hours before now (never above 6 AM).
+      var openAt = PAD + (OPEN_AT - START) * PX;
+      var today = V.date && App.sameDay(V.date, now) || (V.mode !== 'day' && V.mode !== 'month');
+      sc.scrollTop = V.scroll != null ? V.scroll : Math.max(openAt, today ? y(now) - 170 : openAt);
       sc.addEventListener('scroll', function () { V.scroll = sc.scrollTop; });
     }
   }
@@ -342,9 +350,15 @@
           dayChips();
         });
         timeIn.addEventListener('change', function () { if (timeIn.value) st.time = timeIn.value; else timeIn.value = st.time; });
-        // Tapping anywhere on a picker chip opens the picker, not only on its text.
+        // A tap anywhere on a picker chip, its text included, opens the system picker: the WebView
+        // only does that by itself for the (hidden) picker icon.
         App.$$('.chip-pick', s).forEach(function (l) {
-          l.addEventListener('click', function (ev) { var i = l.querySelector('input'); if (ev.target !== i && i.showPicker) { ev.preventDefault(); try { i.showPicker(); } catch (e) {} } });
+          l.addEventListener('click', function (ev) {
+            var i = l.querySelector('input');
+            ev.preventDefault();
+            if (i.showPicker) { try { i.showPicker(); return; } catch (e) {} } // can throw if one is already open
+            i.focus();
+          });
         });
         s.addEventListener('click', function (ev) {
           var t = ev.target.closest('button');
