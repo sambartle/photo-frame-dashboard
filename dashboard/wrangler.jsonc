@@ -1,12 +1,16 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  // Deploys to YOUR Cloudflare account (npx wrangler login), at home-dashboard.<your-subdomain>.workers.dev.
-  // Rename it here if you like. See README.md for the one-time setup.
-  "name": "home-dashboard",
+  // Deploys to YOUR Cloudflare account (npx wrangler login). See README.md for the one-time setup.
+  // Renaming it creates a new Worker; secrets don't follow (npm run secrets), and every screen
+  // and phone needs the new address with ?key= once (tools/moved/ can redirect the old one).
+  "name": "home-hq",
   "main": "worker/index.js",
   "compatibility_date": "2026-09-30",
-  // Serve only at <name>.<subdomain>.workers.dev; no per-version preview URLs.
-  "workers_dev": true,
+  // Serve only at your own domain (a zone on this Cloudflare account; Cloudflare adds the DNS record
+  // and certificate). Without one, drop "routes" and set workers_dev to true for
+  // <name>.<subdomain>.workers.dev. No per-version preview URLs either way.
+  "routes": [{ "pattern": "homehq.sambartle.co.uk", "custom_domain": true }],
+  "workers_dev": false,
   "preview_urls": false,
   "assets": {
     "directory": "./dist",

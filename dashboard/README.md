@@ -85,17 +85,19 @@ npx wrangler login
    npm run deploy
    ```
 
-   Wrangler prints your URL, for example `https://home-dashboard.<you>.workers.dev`. Open it once as
-   `https://home-dashboard.<you>.workers.dev/?key=<DASHBOARD_KEY>`. The key moves into a cookie and
+   Wrangler prints your address: your own domain from `routes` in `wrangler.jsonc` (a domain on the
+   same Cloudflare account; Cloudflare adds the DNS record and certificate), or
+   `https://<name>.<you>.workers.dev` without one. Open it once as
+   `https://<your address>/?key=<DASHBOARD_KEY>`. The key moves into a cookie and
    disappears from the address bar.
 
 5. **Point the frame at it.** From the repository root, with the frame on ADB:
 
    ```bash
-   scripts/set-kiosk-url.sh 'https://home-dashboard.<you>.workers.dev/?key=<DASHBOARD_KEY>'
+   scripts/set-kiosk-url.sh 'https://<your address>/?key=<DASHBOARD_KEY>'
    ```
 
-6. **Add photos.** On a phone, open `https://home-dashboard.<you>.workers.dev/upload?key=<DASHBOARD_KEY>`,
+6. **Add photos.** On a phone, open `https://<your address>/upload?key=<DASHBOARD_KEY>`,
    pick who's adding them, and choose photos. They're shrunk and rotated on the phone (1920 px and
    960 px copies) and dated from EXIF, so "On this day" works.
 
@@ -207,6 +209,22 @@ frame, the heart on the Photos tab marks favourites, which come up more often.
 **Share** on photos in the gallery or Google Photos. They open on the upload page, ready to go:
 add a place if you like and tap **Upload**. iPhones can't add web apps to the share menu, so they
 keep using `/upload`.
+
+### Moving to a new address
+
+Renaming the Worker or changing its domain gives the dashboard a new address. The data stays (D1
+and R2 are attached by id), but secrets belong to each Worker, and every screen and phone signs in
+again because the cookie belongs to the old address. To move without visiting each one:
+
+1. Change `name` and/or `routes` in `wrangler.jsonc`, `npm run deploy`, then `npm run secrets`.
+2. Set `NEW_ORIGIN` and the old name in `tools/moved/wrangler.jsonc`, then
+   `npx wrangler deploy -c tools/moved/wrangler.jsonc`. The old address now redirects every page to
+   the new one, adding the key for anyone who already had it (the old cookie or `?key=`), and pages
+   left open reload into it within a few minutes.
+3. Point each frame at the new address with `scripts/set-kiosk-url.sh`: the kiosk keeps starting
+   from the address it was given, so until then it goes through the redirect. Reinstall the phone
+   app from the new address (the share menu entry belongs to the old one).
+4. When nothing uses the old address any more, delete its Worker in the Cloudflare dashboard.
 
 ### Backups
 
