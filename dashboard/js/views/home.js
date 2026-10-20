@@ -99,8 +99,8 @@
     var big = mins < 100
       ? '<div class="h-hero-count num">' + Math.round(mins) + '<small>min</small></div>'
       : '<div class="h-hero-count num">' + App.fmt.time(e.start, false) + '<small>' + App.fmt.ampm(e.start) + '</small></div>';
-    var leavePill = '', tone = '', kicker = 'Next up';
-    if (e.travel) {
+    var leavePill = '', tone = '', kicker = 'Next up', journey = App.journey(e);
+    if (journey) {
       // Within the hour the count is time to leave. Past leave-by, anyone on the event still at home
       // (per Home Assistant) is running late; once they're all out, it's back to "starts in".
       var tracked = e.people.map(App.person).filter(function (x) { return x.tracked; });
@@ -123,7 +123,7 @@
       '<div class="h-hero-main">' +
       '  <div class="label label--on">' + kicker + ' · ' + App.esc(whoText) + '</div>' +
       '  <div class="h-hero-title serif">' + App.esc(e.title) + '</div>' +
-      '  <div class="h-hero-meta">' + App.fmt.range(e.start, e.end) + (e.travel ? ' · ' + e.travel + ' min to get there' : '') + (e.loc ? ' · ' + App.esc(e.loc) : '') + '</div>' +
+      '  <div class="h-hero-meta">' + App.fmt.range(e.start, e.end) + (journey ? ' · ' + App.journeyText(journey) : '') + (e.loc ? ' · ' + App.esc(e.loc) : '') + '</div>' +
       '  <div class="h-hero-foot">' + (e.people.length > 1 ? App.dots(e.people, 22) : '') + leavePill + '</div>' +
       '</div>' + big + '</button>';
   }

@@ -180,6 +180,36 @@ about 15 minutes. To refresh straight away:
 npx wrangler d1 execute home-hq --remote --command "DELETE FROM cache WHERE key = 'calendar'"
 ```
 
+**Leave-by times.** Lines in an event's description set when to leave:
+
+- `Travel: 25`: minutes door to door. Used as written when there's no live drive time.
+- `Walk: 5`: minutes from parking to the door, added to the live drive time. Optional.
+
+With a `GOOGLE_MAPS_KEY` in `secrets.json`, events that have a **location** and start in the next 4
+hours get a live, traffic-aware drive time from Google instead of `Travel:`. It starts from wherever
+Home Assistant places the event's people (their phone's position, from the companion app), or from
+home (`zone.home`) for anyone it can't place; with several people the longest drive counts. Each
+event is looked up at most every 10 minutes. If Google can't find the place, has no route, or the
+drive is over 3 hours, `Travel:` is used. The event sheet says which was used. A lookup sends the
+person's position and the event's location to Google.
+
+To get the key, once:
+
+1. In the [Google Cloud console](https://console.cloud.google.com), create a project (for example
+   "Home HQ") and attach a billing account; Google requires one even within the free allowance.
+2. **APIs & Services → Library**: enable the **Routes API**.
+3. **APIs & Services → Credentials → Create credentials → API key**, then edit it: under **API
+   restrictions** choose **Restrict key** and tick only the Routes API. Leave application
+   restrictions off: the Worker calls from Cloudflare's servers.
+4. The dashboard asks Google at most 300 times a day (then uses `Travel:` until midnight), so a fault
+   can't run up a bill. On a paid account you can also cap it at Google: **Google Maps Platform →
+   Quotas → Routes API → "Directions - ComputeRoutes per request quota per day"**. Free trial
+   accounts can't edit quotas, but can't be charged either: the API just stops when the trial ends.
+5. Put the key in `secrets.json` as `GOOGLE_MAPS_KEY` and run `npm run secrets`.
+
+A typical family calendar needs about a thousand lookups a month, inside the monthly free allowance
+for the Routes API at the time of writing; check Google's current pricing.
+
 Add and change events in the Google Calendar app as usual; the frame follows within the same window.
 Events added with **+** on the frame stay on the dashboard and never reach Google. (Planned: writing
 them to Google through a service account the calendars are shared with.) To remove a

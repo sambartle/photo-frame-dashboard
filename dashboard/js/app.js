@@ -96,7 +96,17 @@
       return ev.allDay && ev.start < e && ev.end > s && (!pid || ev.people.indexOf(pid) > -1);
     });
   };
-  App.leaveBy = function (e) { return e.travel ? new Date(+e.start - e.travel * 60000) : e.start; };
+  // How long it takes to get there: the live drive time (Google, from where Home Assistant places
+  // the person) plus Walk:, or else the event's Travel:. Null when there's neither.
+  App.journey = function (e) {
+    if (e.drive) return { mins: e.drive.mins + (e.walk || 0), drive: e.drive.mins, walk: e.walk || 0, from: e.drive.from, live: true };
+    return e.travel ? { mins: e.travel, live: false } : null;
+  };
+  App.journeyText = function (j) {
+    if (!j) return '';
+    return j.live ? j.drive + ' min drive' + (j.walk ? ' + ' + j.walk + ' min walk' : '') : j.mins + ' min to get there';
+  };
+  App.leaveBy = function (e) { var j = App.journey(e); return j ? new Date(+e.start - j.mins * 60000) : e.start; };
   // The next thing someone needs to act on: earliest upcoming "leave by" today.
   App.nextEvent = function () {
     var now = App.now();

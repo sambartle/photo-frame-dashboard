@@ -1,4 +1,5 @@
-// Upload secrets.json to the Worker as Cloudflare secrets: DASHBOARD_KEY, HA_TOKEN and CALENDARS.
+// Upload secrets.json to the Worker as Cloudflare secrets: DASHBOARD_KEY, HA_TOKEN, CALENDARS and
+// GOOGLE_MAPS_KEY (optional: live drive times for events with a location).
 // Cloudflare never shows a secret again, so secrets.json is your only readable copy: keep it out
 // of git (refused below) and out of synced folders, and back it up somewhere safe.
 //
@@ -37,6 +38,9 @@ if (key && key.length < 12) fail('DASHBOARD_KEY is short; use at least 12 random
 const token = typeof S.HA_TOKEN === 'string' ? S.HA_TOKEN.trim() : '';
 if (token && token.split('.').length !== 3) fail('HA_TOKEN doesn’t look like a Home Assistant long-lived token (three parts separated by dots).');
 
+const maps = typeof S.GOOGLE_MAPS_KEY === 'string' ? S.GOOGLE_MAPS_KEY.trim() : '';
+if (maps && !/^AIza[\w-]{30,}$/.test(maps)) fail('GOOGLE_MAPS_KEY doesn’t look like a Google API key (starts with AIza).');
+
 const cals = S.CALENDARS;
 if (cals != null) {
   if (!Array.isArray(cals)) fail('CALENDARS must be a list: [ { "url": …, "people": … } ]');
@@ -57,8 +61,9 @@ const out = {};
 if (key) out.DASHBOARD_KEY = key;
 if (token) out.HA_TOKEN = token;
 if (cals && cals.length) out.CALENDARS = JSON.stringify(cals);
+if (maps) out.GOOGLE_MAPS_KEY = maps;
 const names = Object.keys(out);
-const skipped = ['DASHBOARD_KEY', 'HA_TOKEN', 'CALENDARS'].filter((n) => !out[n]);
+const skipped = ['DASHBOARD_KEY', 'HA_TOKEN', 'CALENDARS', 'GOOGLE_MAPS_KEY'].filter((n) => !out[n]);
 console.log('secrets.json OK: ' + (names.join(', ') || 'nothing filled in') + (skipped.length ? ' (blank, skipped: ' + skipped.join(', ') + ')' : '') +
   (cals && cals.length ? '; ' + cals.length + ' calendar(s), for ' + cals.map((c) => [].concat(c.people).join('+')).join(', ') : ''));
 if (mode === 'check' || !names.length) process.exit(0);

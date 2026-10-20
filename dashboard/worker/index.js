@@ -302,6 +302,92 @@ async function refreshCalendars(env, prev) {
   };
 }
 
+// ------------------------------------------------------------------ live drive times
+// For events with a location starting in the next 4 hours: Google's traffic-aware drive time from
+// wherever Home Assistant places the event's people (their phone's position), or from home
+// (zone.home) for anyone it can't place. With several people, the longest drive counts. Kept 10
+// minutes per event, failures too, so a place Google can't find isn't asked again each poll.
+// Needs GOOGLE_MAPS_KEY (secrets.json); without it, or when Google can't answer, Travel: is used.
+// At most DRIVE_DAILY_MAX requests to Google a day (counted here, whatever the Cloud console
+// allows); after that, Travel: until midnight.
+const DRIVE_AHEAD_MS = 4 * 3600e3, DRIVE_TTL_MS = 10 * 60e3, DRIVE_MAX_MIN = 180, DRIVE_DAILY_MAX = 300;
+async function driveBudget(env) {
+  const key = 'drive-count:' + localDay().ymd;
+  const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind(key).first();
+  let used = row ? +row.value : 0;
+  return {
+    take() { if (used >= DRIVE_DAILY_MAX) return false; used++; return true; },
+    save() {
+      return env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+        .bind(key, String(used), Date.now() + 2 * DAY_MS).run();
+    },
+  };
+}
+async function homeStates(env) {
+  if (!CFG.home || !env.HA_TOKEN) return {};
+  try {
+    const res = await ha(env, '/api/states');
+    if (!res.ok) return {};
+    const by = {};
+    (await res.json()).forEach((s) => { by[s.entity_id] = s; });
+    return by;
+  } catch (e) { return {}; }
+}
+function where(s) {
+  const a = (s && s.attributes) || {};
+  return typeof a.latitude === 'number' && typeof a.longitude === 'number' ? { latitude: a.latitude, longitude: a.longitude } : null;
+}
+async function driveMinutes(env, origin, address) {
+  const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'X-Goog-Api-Key': env.GOOGLE_MAPS_KEY, 'X-Goog-FieldMask': 'routes.duration' },
+    body: JSON.stringify({ origin: { location: { latLng: origin } }, destination: { address }, travelMode: 'DRIVE', routingPreference: 'TRAFFIC_AWARE', regionCode: 'gb' }),
+  });
+  if (!res.ok) { console.warn('Routes API: HTTP ' + res.status); return null; }
+  const r = ((await res.json()).routes || [])[0];
+  const secs = r && parseInt(r.duration, 10);
+  return secs > 0 ? Math.ceil(secs / 60) : null;
+}
+async function driveFor(env, ev, states, budget) {
+  const home = where(states['zone.home']);
+  const starts = {};
+  ev.people.forEach((id) => {
+    const p = CFG.people.find((x) => x.id === id);
+    const at = p && p.ha ? where(states[p.ha]) : null;
+    if (at) starts[p.name] = at; else if (home) starts.home = home;
+  });
+  let best = null;
+  for (const from of Object.keys(starts).slice(0, 3)) {
+    if (!budget.take()) break;
+    const mins = await driveMinutes(env, starts[from], ev.loc);
+    if (mins != null && mins <= DRIVE_MAX_MIN && (!best || mins > best.mins)) best = { mins, from: from === 'home' ? 'home' : from };
+  }
+  return best;
+}
+async function addDrives(env, events) {
+  if (!env.GOOGLE_MAPS_KEY) return;
+  const now = Date.now();
+  const due = events.filter((e) => e.loc && !e.allDay && Date.parse(e.start) > now && Date.parse(e.start) - now < DRIVE_AHEAD_MS).slice(0, 8);
+  if (!due.length) return;
+  const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('drives').first();
+  const saved = row ? JSON.parse(row.value) : {}, kept = {};
+  let states = null, asked = false, budget = null;
+  for (const e of due) {
+    let d = saved[e.id];
+    if (!d || d.loc !== e.loc || now - d.at > DRIVE_TTL_MS) {
+      states = states || await homeStates(env);
+      budget = budget || await driveBudget(env);
+      d = Object.assign({ loc: e.loc, at: now }, (await driveFor(env, e, states, budget).catch(() => null)) || { mins: null });
+      asked = true;
+    }
+    kept[e.id] = d;
+    if (d.mins != null) e.drive = { mins: d.mins, from: d.from };
+  }
+  if (asked) await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+    .bind('drives', JSON.stringify(kept), now + DAY_MS).run();
+  if (budget) await budget.save();
+}
+
 async function getCalendar(env) {
   const row = await env.DB.prepare("SELECT value, expires FROM cache WHERE key = 'calendar'").first();
   let feed = row ? JSON.parse(row.value) : null;
@@ -312,12 +398,11 @@ async function getCalendar(env) {
       .bind('calendar', JSON.stringify(feed), Date.now() + CAL_TTL_MS).run();
   }
   const local = await env.DB.prepare('SELECT id, title, people, start, end FROM events WHERE end > ?').bind(Date.now() - 45 * DAY_MS).all();
-  return {
-    events: feed.events.concat(local.results.map((e) => ({
-      id: e.id, title: e.title, people: JSON.parse(e.people), start: new Date(e.start).toISOString(), end: new Date(e.end).toISOString(), local: true,
-    }))),
-    errors: feed.errors, checked: feed.checked,
-  };
+  const events = feed.events.map((e) => Object.assign({}, e)).concat(local.results.map((e) => ({
+    id: e.id, title: e.title, people: JSON.parse(e.people), start: new Date(e.start).toISOString(), end: new Date(e.end).toISOString(), local: true,
+  })));
+  await addDrives(env, events).catch((err) => console.error('addDrives', err));
+  return { events, errors: feed.errors, checked: feed.checked };
 }
 
 async function addEvent(env, b) {
