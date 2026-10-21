@@ -80,7 +80,8 @@
       "smoke": { "entities": ["binary_sensor.hallway_smoke", "binary_sensor.landing_co"] },
       "garageOpenMinutes": 15
     },
-    "energy": { "cost": ["sensor.electricity_cost_today", "sensor.gas_cost_today"], "power": "sensor.house_power", "high": 3000 }
+    "energy": { "cost": ["sensor.electricity_cost_today", "sensor.gas_cost_today"], "power": "sensor.house_power", "high": 3000,
+      "usage": ["sensor.electricity_usage_today", "sensor.gas_usage_today"], "rate": 0.245, "standing": 0.55 }
   },
 
   "frames": { "notify": ["notify.mobile_app_your_phone"], "quietMinutes": 20 }

@@ -382,6 +382,13 @@ seconds, so an alert can take up to 10 s to appear:
 spend, such as a smart meter's electricity and gas cost today. With `power` (W or kW now), the
 line switches to the current draw while it's above `high` watts (3000 by default).
 
+With `power` set, the Home card's line shows **electricity so far today** (worked out from the
+power sensor's history) and the Home tab gets an **Energy** card; tapping either opens **Energy ·
+today so far**: kWh per hour as bars, now, today's peak, and the same point yesterday. Add `usage`
+(a smart meter's "usage today" sensors) and the panel says when the meter last reported: meter
+data collected via the DCC usually arrives hours late. `rate` (£/kWh) and `standing` (£/day) add
+an estimated cost.
+
 The Home card's second line is an **all clear**: it names the first thing that needs a look (a
 door unlocked, the garage open, the water main off, leak or smoke sensors that have stopped
 reporting, or a low battery on one of them) and reads "All clear" otherwise. Tap it for the list.

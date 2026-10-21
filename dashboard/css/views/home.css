@@ -157,3 +157,27 @@ button.h-bins[hidden] { display: none; }
 .ck-ok span { color: var(--ink); }
 .ck-bad { color: #B45F00; font-weight: 800; }
 .ck-detail { font-size: 16px !important; color: var(--ink-2); line-height: 1.5; padding-left: 34px; }
+
+/* ---- energy sheet: today so far */
+.en { min-width: 820px; }
+.en-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin: 8px 0 18px; }
+.en-hero .num { display: block; font-size: 64px; line-height: .9; }
+.en-hero small { font-size: 17px; color: var(--ink-2); }
+.en-facts { display: flex; gap: 28px; }
+.en-facts div { display: flex; flex-direction: column; align-items: flex-end; }
+.en-facts b { font-size: 28px; }
+.en-facts span { font-size: var(--fs-min); color: var(--mute); }
+.en-plot { background: var(--paper); border-radius: 16px; padding: 12px 12px 4px; }
+.en-chart { width: 100%; height: auto; display: block; }
+.en-grid { stroke: var(--line); stroke-width: 1; }
+.en-base { stroke: var(--ink-2); stroke-width: 1.5; }
+.en-ax { font-size: 12px; font-weight: 700; fill: var(--mute); font-family: var(--sans); }
+.en-bar { fill: var(--ink); }
+.en-bar.is-now { fill: var(--ink); opacity: .35; }
+/* a tapped bar: the others fade (no new colour: colours on this dashboard mean people) */
+.en-chart.has-pick .en-bar { opacity: .3; }
+.en-chart.has-pick .en-bar.is-picked { opacity: 1; }
+.en-hit { fill: transparent; cursor: pointer; }
+.en-tip { margin-top: 10px; font-size: 18px; min-height: 26px; }
+.en-tip span { color: var(--mute); font-size: 15px; }
+.en-note { margin-top: 10px; font-size: 15px; color: var(--ink-2); line-height: 1.4; }

@@ -680,6 +680,65 @@ function checksView(al, by) {
 // settings.json home.energy: { "cost": "sensor.…" or a list to add up (money today, e.g. electricity
 // and gas), "power": "sensor.…" (W or kW now), "high": 3000 (watts that count as a lot) }.
 // Either can be left out.
+// Today so far, for the energy panel: electricity per hour, worked out from the power sensor's
+// history (Home Assistant records a reading each time it changes, so a reading holds until the
+// next). Also the same point yesterday, today's peak, and when the smart meter's own usage
+// sensors (home.energy.usage) last changed: data collected via the DCC often arrives hours or a
+// day late, so the panel says so instead of showing stale numbers as today's. Optional
+// home.energy.rate (£/kWh) and standing (£/day) give an estimated cost. Kept 5 minutes.
+// Hour buckets are midnight + n hours, so on the two clock-change days one hour is off by one.
+function localMidnight(ms) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: CFG.tz, hour: 'numeric', minute: 'numeric', second: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(ms));
+  const get = (t) => +parts.find((x) => x.type === t).value;
+  return ms - ((get('hour') * 60 + get('minute')) * 60 + get('second')) * 1000 - (ms % 1000);
+}
+function wattHours(points, from, to, unitK) {
+  // points: [[ms, watts|NaN]] sorted; returns Wh between from and to, per hour from `from`.
+  const hours = new Array(Math.ceil((to - from) / 36e5)).fill(0);
+  points.forEach((pt, i) => {
+    const w = unitK ? pt[1] * 1000 : pt[1];
+    if (!(w >= 0)) return; // unavailable or unknown: no reading for that stretch
+    let a = Math.max(pt[0], from);
+    const b = Math.min(i + 1 < points.length ? points[i + 1][0] : to, to);
+    while (a < b) {
+      const h = Math.floor((a - from) / 36e5), edge = Math.min(b, from + (h + 1) * 36e5);
+      hours[h] += w * (edge - a) / 36e5;
+      a = edge;
+    }
+  });
+  return hours;
+}
+async function energyToday(env) {
+  const E = CFG.home && CFG.home.energy;
+  if (!E || !E.power) return { none: true };
+  return cached(env, 'energy-today', 5 * 60e3, async () => {
+    const now = Date.now(), midnight = localMidnight(now), since = midnight - 864e5;
+    const usage = [].concat(E.usage || []);
+    const ids = [E.power].concat(usage);
+    const [hist, cur] = await Promise.all([
+      ha(env, '/api/history/period/' + new Date(since).toISOString() + '?minimal_response&no_attributes&end_time=' + encodeURIComponent(new Date(now).toISOString()) + '&filter_entity_id=' + ids.join(',')).then((r) => r.ok ? r.json() : []),
+      ha(env, '/api/states/' + E.power).then((r) => r.ok ? r.json() : null),
+    ]);
+    const series = {};
+    hist.forEach((list) => { if (list.length) series[list[0].entity_id] = list.map((x) => [Date.parse(x.last_changed || x.last_updated), parseFloat(x.state)]); });
+    const unitK = cur && /^kw$/i.test((cur.attributes || {}).unit_of_measurement || '');
+    const pts = series[E.power] || [];
+    const today = wattHours(pts, midnight, now, unitK).map((wh) => +(wh / 1000).toFixed(3));
+    const yesterday = wattHours(pts, since, since + (now - midnight), unitK).reduce((t, wh) => t + wh, 0) / 1000;
+    let peak = null;
+    pts.forEach((pt) => { const w = unitK ? pt[1] * 1000 : pt[1]; if (pt[0] >= midnight && w >= 0 && (!peak || w > peak.w)) peak = { w: Math.round(w), at: pt[0] }; });
+    const total = today.reduce((t, k) => t + k, 0);
+    const nowW = cur ? parseFloat(cur.state) * (unitK ? 1000 : 1) : null;
+    const reported = usage.map((id) => (series[id] || []).filter((x) => x[1] > 0).map((x) => x[0]).pop() || 0);
+    return {
+      midnight, now, hours: today, total: +total.toFixed(2), yesterdayByNow: +yesterday.toFixed(2),
+      nowW: nowW >= 0 ? Math.round(nowW) : null, peak,
+      cost: E.rate ? +(total * E.rate + (E.standing || 0)).toFixed(2) : null,
+      meterReported: reported.length ? Math.max.apply(null, reported) || null : null,
+    };
+  });
+}
+
 function energyView(E, by) {
   if (!E) return null;
   const num = (id) => { const s = id && by[id]; const n = s ? parseFloat(s.state) : NaN; return isNaN(n) ? null : { n, unit: (s.attributes || {}).unit_of_measurement || '' }; };
@@ -814,6 +873,7 @@ async function api(req, env, url) {
     if (!CFG.home) return bad('Home Assistant is not configured', 404);
     if (!env.HA_TOKEN) return bad('HA_TOKEN secret is not set', 503);
     if (p === '/home' && m === 'GET') return json(await getHome(env));
+    if (p === '/home/energy' && m === 'GET') return json(await energyToday(env));
     if ((r = /^\/home\/device\/([\w.]+)$/.exec(p)) && m === 'POST') return controlDevice(env, r[1], await body(req));
     if ((r = /^\/home\/([\w-]+)$/.exec(p)) && m === 'POST') return homeAction(env, r[1], await body(req));
     if (p === '/ha/camera' || p === '/ha/media') return haImage(env, p.slice(4), url);

@@ -75,10 +75,12 @@
     var unlocked = locks.filter(function (d) { return !d.locked; });
     var garage = garageDev(), gOpen = garage && garage.state !== 'closed';
     var secure = !unlocked.length && !gOpen;
-    var c = D.climate, m = D.media, out = [];
+    var m = D.media, out = []; // climate has its own panel on the right
     out.push('<button class="sum' + (lights.length ? ' sum--warm' : '') + '" data-sum="lights"><span class="label">Lights</span><b class="num">' + lights.length + '</b><small>on in ' + unique(lights.map(function (l) { return l.room; })).length + ' rooms</small></button>');
     if (locks.length || garage) out.push('<button class="sum' + (secure ? '' : ' sum--warn') + '" data-sum="security"><span class="label">Security</span><b class="num">' + (secure ? 'Locked' : unlocked.length + (gOpen ? 1 : 0)) + '</b><small>' + (secure ? (garage ? 'All doors + garage' : 'All doors') : (gOpen ? 'Garage ' + garage.state : '') + (unlocked.length ? (gOpen ? ' · ' : '') + unlocked.map(function (u) { return u.name; }).join(', ') : '') + ' open') + '</small></button>');
-    if (c) out.push('<button class="sum" data-sum="climate"><span class="label">Climate</span><b class="num">' + (c.current != null ? c.current + '°' : '–') + '</b><small>' + (c.mode === 'off' || c.set == null ? 'System off' : (c.set > c.current ? 'Heating' : c.set < c.current ? 'Cooling' : 'Holding') + ' to ' + c.set + '°') + '</small></button>');
+    var E = D.energy, T = D.energyToday;
+    if (E) out.push('<button class="sum' + (E.high ? ' sum--warn' : '') + '" data-sum="energy"><span class="label">Energy</span><b class="num">' + App.fmtWatts(E.watts) + '</b><small>' +
+      (T ? T.total.toFixed(1) + ' kWh today' : 'now · tap for today') + '</small></button>');
     if (m) out.push('<button class="sum" data-sum="media"><span class="label">Media</span><b class="num">' + (m.playing ? 'Playing' : 'Paused') + '</b><small>' + App.esc(m.room) + '</small></button>');
     return out.join('');
   }
@@ -106,7 +108,9 @@
   function climate() {
     var c = D.climate;
     if (!c) return '';
-    var verb = c.mode === 'off' || c.set == null ? 'Off' : c.set > c.current ? 'Heating' : c.set < c.current ? 'Cooling' : 'Holding';
+    // Above the set point a heat-only system (a boiler: no cool or heat_cool mode) is just idle.
+    var cools = c.modes.indexOf('cool') > -1 || c.modes.indexOf('heat_cool') > -1;
+    var verb = c.mode === 'off' || c.set == null ? 'Off' : c.set > c.current ? 'Heating' : c.set < c.current ? (cools ? 'Cooling' : 'Idle') : 'Holding';
     var modes = [['heat', 'Heat'], ['cool', 'Cool'], ['auto', 'Auto'], ['off', 'Off']].filter(function (m) {
       return !c.modes.length || c.modes.indexOf(m[0] === 'auto' ? 'heat_cool' : m[0]) > -1 || (m[0] === 'auto' && c.modes.indexOf('auto') > -1);
     });
@@ -317,6 +321,7 @@
     if ((t = e.target.closest('[data-sum]'))) {
       var k = t.dataset.sum;
       if (k === 'lights' || k === 'security') return listSheet(k);
+      if (k === 'energy') return App.energySheet();
       var target = V.el.querySelector(k === 'climate' ? '.hc-climate' : '.hc-media');
       target.classList.add('is-pulse'); setTimeout(function () { target.classList.remove('is-pulse'); }, 900);
       return;

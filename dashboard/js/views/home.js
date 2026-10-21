@@ -276,13 +276,15 @@
     App.sheet('<div class="sheet-pad ck"><div class="label">Home checks</div><h2 class="serif">' + (issues.length ? 'Needs a look' : 'All clear') + '</h2><ul>' + list.join('') + '</ul></div>');
   }
 
-  // Spend today, or the draw right now when it's high (kettle, oven and washer at once).
+  // Electricity so far today (from the power sensor), or the draw right now when it's high
+  // (kettle, oven and washer at once). Tap for the energy panel. The smart meter's own cost isn't
+  // used here: it often arrives a day late, so early on it's only the standing charge.
   function energy() {
-    var E = D.energy;
-    if (!E) return '';
-    if (E.high) return '<div class="h-st-row is-warn">' + App.icon('bolt', 24) + '<b class="num">' + (E.watts / 1000).toFixed(1) + ' kW</b><span>now</span></div>';
-    if (E.cost == null) return E.watts == null ? '' : '<div class="h-st-row">' + App.icon('bolt', 24) + '<b class="num">' + (E.watts >= 1000 ? (E.watts / 1000).toFixed(1) + ' kW' : Math.round(E.watts) + ' W') + '</b><span>now</span></div>';
-    return '<div class="h-st-row">' + App.icon('bolt', 24) + '<b class="num">' + E.currency + E.cost.toFixed(2) + '</b><span>today</span></div>';
+    var E = D.energy, T = D.energyToday;
+    if (!E && !T) return '';
+    if (E && E.high) return '<div class="h-st-row is-warn" data-energy>' + App.icon('bolt', 24) + '<b class="num">' + App.fmtWatts(E.watts) + '</b><span>now</span></div>';
+    if (T) return '<div class="h-st-row" data-energy>' + App.icon('bolt', 24) + '<b class="num">' + T.total.toFixed(1) + ' kWh</b><span>today</span></div>';
+    return E.watts == null ? '' : '<div class="h-st-row" data-energy>' + App.icon('bolt', 24) + '<b class="num">' + App.fmtWatts(E.watts) + '</b><span>now</span></div>';
   }
 
   function paint() {
@@ -328,6 +330,7 @@
           if (e.target.closest('[data-warn]')) { warningSheet(); return; }
           if (e.target.closest('[data-bins]')) { binsTap(); return; }
           if (e.target.closest('[data-checks]') && D.checks) { checksSheet(); return; }
+          if (e.target.closest('[data-energy]')) { App.energySheet(); return; }
           var g = e.target.closest('[data-go]');
           if (g) App.go(g.dataset.go);
         });
