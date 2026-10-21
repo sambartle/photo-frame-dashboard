@@ -326,10 +326,8 @@ async function driveBudget(env) {
 async function homeStates(env) {
   if (!CFG.home || !env.HA_TOKEN) return {};
   try {
-    const res = await ha(env, '/api/states');
-    if (!res.ok) return {};
     const by = {};
-    (await res.json()).forEach((s) => { by[s.entity_id] = s; });
+    (await haSnapshot(env)).forEach((s) => { by[s.entity_id] = s; });
     return by;
   } catch (e) { return {}; }
 }
@@ -574,10 +572,90 @@ async function getWarnings(env) {
 }
 
 // ------------------------------------------------------------------ Home Assistant
+// Every call gives up after 15 s (history 30 s): when Home Assistant is struggling, frames should
+// show it offline, not stack up requests that make it worse.
 function ha(env, path, init) {
   init = init || {};
   init.headers = Object.assign({ authorization: 'Bearer ' + env.HA_TOKEN, 'content-type': 'application/json' }, init.headers || {});
+  if (!init.signal) init.signal = AbortSignal.timeout(path.indexOf('/api/history') === 0 ? 30e3 : 15e3);
   return fetch(CFG.home.url.replace(/\/$/, '') + path, init);
+}
+
+// ------------------------------------------------------------------ fetching state lightly
+// Home Assistant's /api/states sends every entity (1,766 here, ~800 KB) and a non-admin user can't
+// render templates, so the dashboard asks for the few dozen entities it shows one at a time (a few
+// hundred bytes each, in parallel; Workers allow 50 subrequests per call). A full list is read only
+// every 5 minutes, to discover media players and the alert sensors' batteries. The result is shared
+// by every frame for 8 s through Cloudflare's edge cache; controlling something clears it.
+const SNAP_TTL = 8, DISCOVER_TTL = 300, MAX_FETCH = 45;
+async function edgeCache(key, ttl, compute) {
+  const req = new Request('https://cache.homehq.internal/' + key);
+  const hit = await caches.default.match(req);
+  if (hit) return hit.json();
+  const value = await compute();
+  await caches.default.put(req, new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json', 'cache-control': 'max-age=' + ttl } }));
+  return value;
+}
+function forgetSnapshot() { return caches.default.delete(new Request('https://cache.homehq.internal/ha-snap')).catch(() => {}); }
+function coreIds() {
+  const H = CFG.home, al = CFG.alerts, E = H.energy || {}, ids = new Set(['zone.home']);
+  CFG.devices.forEach((d) => ids.add(d.entity));
+  [H.climate, H.media, al.doorbell && al.doorbell.entity, al.doorbell && al.doorbell.lock, al.leak && al.leak.valve, E.power]
+    .forEach((id) => { if (id) ids.add(id); });
+  [].concat((al.leak && al.leak.entities) || [], (al.smoke && al.smoke.entities) || [], E.cost || [], E.usage || []).forEach((id) => ids.add(id));
+  CFG.people.forEach((p) => { if (p.ha) ids.add(p.ha); });
+  return ids;
+}
+// Every 5 minutes: which media players exist (one per name, the most active) and which battery
+// sensors belong to the alert devices. Small lists, kept in the edge cache.
+// The last good lists are also kept in D1: when the full list fails (Home Assistant busy or
+// restarting) the small per-entity reads carry on with them instead of failing too.
+async function discover(env) {
+  return edgeCache('ha-discover', DISCOVER_TTL, async () => {
+    let states;
+    try {
+      const res = await ha(env, '/api/states');
+      if (!res.ok) throw new Error('Home Assistant: HTTP ' + res.status);
+      states = await res.json();
+    } catch (err) {
+      const last = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('ha-discover-last').first();
+      if (last) return JSON.parse(last.value);
+      throw err;
+    }
+    const players = playersView(CFG.home, states).map((p) => p.id);
+    const al = CFG.alerts, watched = [].concat((al.leak && al.leak.entities) || [], (al.smoke && al.smoke.entities) || []).map((id) => id.split('.')[1]);
+    const batteries = states.filter((x) => x.entity_id.indexOf('sensor.') === 0 && (x.attributes || {}).device_class === 'battery' &&
+      watched.some((w) => w.indexOf(x.entity_id.slice(7).replace(/_battery(_level)?$/, '')) === 0)).map((x) => x.entity_id);
+    const found = { players, batteries };
+    await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+      .bind('ha-discover-last', JSON.stringify(found), Date.now() + 30 * DAY_MS).run();
+    return found;
+  });
+}
+// The states the dashboard needs, as /api/states would give them, but only those.
+// A failure is remembered for 30 s: while Home Assistant is down or swamped, frames get "offline"
+// straight away instead of every poll asking it again.
+async function haSnapshot(env) {
+  const failReq = new Request('https://cache.homehq.internal/ha-fail');
+  const failed = await caches.default.match(failReq);
+  if (failed) throw new Error(await failed.text());
+  try {
+    return await haSnapshotFetch(env);
+  } catch (err) {
+    await caches.default.put(failReq, new Response(err.message || 'Home Assistant unreachable', { headers: { 'cache-control': 'max-age=30' } }));
+    throw err;
+  }
+}
+async function haSnapshotFetch(env) {
+  return edgeCache('ha-snap', SNAP_TTL, async () => {
+    const found = await discover(env);
+    const ids = Array.from(new Set(Array.from(coreIds()).concat(found.players, found.batteries))).slice(0, MAX_FETCH);
+    const got = await Promise.all(ids.map((id) => ha(env, '/api/states/' + id).then((r) => (r.ok ? r.json() : null), () => null)));
+    const states = got.filter(Boolean);
+    if (!states.length) throw new Error('Home Assistant unreachable');
+    if (states.length < ids.length / 2) throw new Error('Home Assistant answered only ' + states.length + ' of ' + ids.length);
+    return states;
+  });
 }
 async function haService(env, domain, service, data) {
   const res = await ha(env, '/api/services/' + domain + '/' + service, { method: 'POST', body: JSON.stringify(data) });
@@ -602,11 +680,9 @@ async function getHome(env) {
   if (!env.HA_TOKEN) return { online: false, error: 'HA_TOKEN secret is not set' };
   let states;
   try {
-    const res = await ha(env, '/api/states');
-    if (!res.ok) return { online: false, error: 'Home Assistant: HTTP ' + res.status };
-    states = await res.json();
+    states = await haSnapshot(env);
   } catch (err) {
-    return { online: false, error: 'Home Assistant unreachable' };
+    return { online: false, error: /HTTP/.test(err.message) ? err.message : 'Home Assistant unreachable' };
   }
   const by = {};
   states.forEach((s) => { by[s.entity_id] = s; });
@@ -702,6 +778,7 @@ async function mediaControl(env, id, b) {
     const why = /^(play_pause|next|previous)$/.test(b.do) ? 'nothing to play or resume' : 'it didn’t accept that';
     return bad(name + ': ' + why, 409);
   }
+  await forgetSnapshot();
   return json({ ok: true });
 }
 
@@ -760,35 +837,42 @@ function wattHours(points, from, to, unitK) {
   });
   return hours;
 }
+async function powerHistory(env, from, to) {
+  const E = CFG.home.energy;
+  const r = await ha(env, '/api/history/period/' + new Date(from).toISOString() + '?minimal_response&no_attributes&end_time=' + encodeURIComponent(new Date(to).toISOString()) + '&filter_entity_id=' + E.power);
+  if (!r.ok) throw new Error('history: HTTP ' + r.status);
+  const list = (await r.json())[0] || [];
+  return list.map((x) => [Date.parse(x.last_changed || x.last_updated), parseFloat(x.state)]);
+}
 async function energyToday(env) {
   const E = CFG.home && CFG.home.energy;
   if (!E || !E.power) return { none: true };
-  return cached(env, 'energy-today', 5 * 60e3, async () => {
-    const now = Date.now(), midnight = localMidnight(now), since = midnight - 864e5;
-    const usage = [].concat(E.usage || []);
-    const ids = [E.power].concat(usage);
-    const [hist, cur] = await Promise.all([
-      ha(env, '/api/history/period/' + new Date(since).toISOString() + '?minimal_response&no_attributes&end_time=' + encodeURIComponent(new Date(now).toISOString()) + '&filter_entity_id=' + ids.join(',')).then((r) => r.ok ? r.json() : []),
-      ha(env, '/api/states/' + E.power).then((r) => r.ok ? r.json() : null),
-    ]);
-    const series = {};
-    hist.forEach((list) => { if (list.length) series[list[0].entity_id] = list.map((x) => [Date.parse(x.last_changed || x.last_updated), parseFloat(x.state)]); });
-    const unitK = cur && /^kw$/i.test((cur.attributes || {}).unit_of_measurement || '');
-    const pts = series[E.power] || [];
-    const today = wattHours(pts, midnight, now, unitK).map((wh) => +(wh / 1000).toFixed(3));
-    const yesterday = wattHours(pts, since, since + (now - midnight), unitK).reduce((t, wh) => t + wh, 0) / 1000;
+  const now = Date.now(), midnight = localMidnight(now);
+  const by = {};
+  (await haSnapshot(env).catch(() => [])).forEach((x) => { by[x.entity_id] = x; });
+  const cur = by[E.power], unitK = cur && /^kw$/i.test((cur.attributes || {}).unit_of_measurement || '');
+  // Yesterday's 24 hourly totals: once a day. Today's: every 15 minutes. Both are recorder queries.
+  const yday = await cached(env, 'energy-yday:' + midnight, DAY_MS + 36e5, async () =>
+    wattHours(await powerHistory(env, midnight - DAY_MS, midnight), midnight - DAY_MS, midnight, unitK).map((wh) => wh / 1000));
+  const today = await cached(env, 'energy-today', 15 * 60e3, async () => {
+    const pts = await powerHistory(env, midnight, now);
     let peak = null;
-    pts.forEach((pt) => { const w = unitK ? pt[1] * 1000 : pt[1]; if (pt[0] >= midnight && w >= 0 && (!peak || w > peak.w)) peak = { w: Math.round(w), at: pt[0] }; });
-    const total = today.reduce((t, k) => t + k, 0);
-    const nowW = cur ? parseFloat(cur.state) * (unitK ? 1000 : 1) : null;
-    const reported = usage.map((id) => (series[id] || []).filter((x) => x[1] > 0).map((x) => x[0]).pop() || 0);
-    return {
-      midnight, now, hours: today, total: +total.toFixed(2), yesterdayByNow: +yesterday.toFixed(2),
-      nowW: nowW >= 0 ? Math.round(nowW) : null, peak,
-      cost: E.rate ? +(total * E.rate + (E.standing || 0)).toFixed(2) : null,
-      meterReported: reported.length ? Math.max.apply(null, reported) || null : null,
-    };
+    pts.forEach((pt) => { const w = unitK ? pt[1] * 1000 : pt[1]; if (w >= 0 && (!peak || w > peak.w)) peak = { w: Math.round(w), at: pt[0] }; });
+    return { midnight, until: now, hours: wattHours(pts, midnight, now, unitK).map((wh) => +(wh / 1000).toFixed(3)), peak };
   });
+  if (today.midnight !== midnight) return { none: true }; // just past midnight, before the next refresh
+  const total = today.hours.reduce((t, k) => t + k, 0);
+  // Yesterday by the same time: whole hours, then the share of the hour in progress.
+  const h = Math.floor((now - midnight) / 36e5), part = ((now - midnight) % 36e5) / 36e5;
+  const yesterdayByNow = yday.slice(0, h).reduce((t, k) => t + k, 0) + (yday[h] || 0) * part;
+  const nowW = cur ? parseFloat(cur.state) * (unitK ? 1000 : 1) : null;
+  const reported = [].concat(E.usage || []).map((id) => by[id] && parseFloat(by[id].state) > 0 ? Date.parse(by[id].last_changed) : 0);
+  return {
+    midnight, now: today.until, hours: today.hours, total: +total.toFixed(2), yesterdayByNow: +yesterdayByNow.toFixed(2),
+    nowW: nowW >= 0 ? Math.round(nowW) : null, peak: today.peak,
+    cost: E.rate ? +(total * E.rate + (E.standing || 0)).toFixed(2) : null,
+    meterReported: reported.length ? Math.max.apply(null, reported) || null : null,
+  };
 }
 
 function energyView(E, by) {
@@ -819,10 +903,16 @@ async function controlDevice(env, entity, p) {
     else if (domain === 'light' && p.level) await haService(env, 'light', 'turn_on', Object.assign({ brightness_pct: Math.max(1, Math.min(100, Math.round(+p.level))) }, target));
     else await haService(env, domain, 'turn_on', target);
   } else return bad('nothing to change');
+  await forgetSnapshot();
   return json({ ok: true });
 }
 
 async function homeAction(env, what, b) {
+  const res = await homeActionRun(env, what, b);
+  if (res.ok) await forgetSnapshot();
+  return res;
+}
+async function homeActionRun(env, what, b) {
   const H = CFG.home;
   if (what === 'climate' && H.climate) {
     if (b.mode) await haService(env, 'climate', 'set_hvac_mode', { entity_id: H.climate, hvac_mode: b.mode === 'auto' ? 'heat_cool' : str(b.mode, 20) });
