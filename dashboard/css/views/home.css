@@ -40,7 +40,13 @@
 .h-hr.is-wet .h-hr-i { color: #1F6FEB; }
 
 /* ---- presence */
-.h-presence { grid-column: 10 / 13; display: flex; flex-direction: column; justify-content: space-between; border-bottom: 3px solid var(--ink); padding: 2px 0 10px; }
+.h-presence { grid-column: 10 / 13; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; border-bottom: 3px solid var(--ink); padding: 2px 0 10px; }
+/* Sat on the rule like the clock and weather beside it; four or more people fill the column. */
+.h-presence:has(.h-who ~ .h-who ~ .h-who ~ .h-who) { justify-content: space-between; gap: 0; }
+.h-logo { margin-bottom: auto; align-self: flex-end; display: flex; align-items: center; gap: 10px; color: var(--ink); }
+.h-logo-home { font-size: 44px; font-style: italic; line-height: 1; letter-spacing: -.01em; }
+.h-logo-hq { font-size: 32px; line-height: 1; padding: 5px 8px 4px; border-radius: 8px; background: var(--ink); color: var(--paper); letter-spacing: .02em; }
+.h-presence:has(.h-who ~ .h-who ~ .h-who ~ .h-who) .h-logo { display: none; }
 .h-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .h-who > span:not(.avatar) { flex: 1; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
 .h-who b { font-size: 18px; font-weight: 800; white-space: nowrap; flex: none; }

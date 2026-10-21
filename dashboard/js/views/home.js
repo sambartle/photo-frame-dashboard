@@ -71,8 +71,11 @@
   };
 
   // Only people with a Home Assistant person entity; everyone else's whereabouts are unknown.
+  // Home HQ wordmark: "Home" in the serif italic, "HQ" in the clock's heavy condensed face
+  // reversed out of ink. Sits in the free space above the people.
+  var LOGO = '<div class="h-logo" aria-label="Home HQ"><span class="h-logo-home serif">Home</span><span class="h-logo-hq num">HQ</span></div>';
   function presence() {
-    return D.people.filter(function (p) { return p.tracked; }).map(function (p) {
+    return LOGO + D.people.filter(function (p) { return p.tracked; }).map(function (p) {
       // No status yet (Home Assistant offline or still loading): show a dash, not "undefined".
       var sub = p.home ? 'Home' : (p.eta ? '<b>ETA ' + p.eta + ' min</b>' : App.esc(p.status || '–'));
       return '<div class="h-who' + (p.home ? ' is-home' : '') + '" style="' + App.pstyle(p) + '">' +
