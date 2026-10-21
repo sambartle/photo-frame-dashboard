@@ -27,6 +27,7 @@
     var known = D.people.filter(function (p) { return p.tracked && p.status && !/unknown|–/i.test(p.status); });
     return known.length > 0 && known.every(function (p) { return !p.home; });
   }
+  App.everyoneAway = function () { return !!D.homeOnline && everyoneAway(); };
   App.on('minute', function () {
     if (!D.awayOffMinutes || !D.homeOnline) {
       awaySince = null;

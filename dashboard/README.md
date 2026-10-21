@@ -397,6 +397,14 @@ Press and hold the clock in the sidebar, or press **D**, for display controls. F
 preview ambient, night and screen-off modes, show each alert without touching the house, refresh
 data, and check what's connected.
 
+**Sound.** Frames chime for the doorbell, "Leave now" and the bins reminder, and sound a repeating
+alarm with the smoke, carbon monoxide and water leak takeovers until it's dismissed. The sounds are
+generated in the page, so there are no audio files. Chimes stay quiet from 10 PM to 6 AM, in night
+mode and while everyone is away; alarms always sound, in addition to the real alarms. **Sound on
+this frame** in the display controls mutes the chimes and sets a volume, both remembered per frame,
+on top of Android's media volume (the frame's volume buttons, where it has them). Test alerts plays
+each sound, and **Sound check** plays a tone.
+
 **Frames** in the display controls lists every wall display that has checked in (each does every
 5 minutes): its dashboard and kiosk versions, Wi-Fi signal (kiosk 1.2) and when it was last seen.
 One quiet for 15 minutes turns red there and shows a warning on the phone page. Only the kiosk

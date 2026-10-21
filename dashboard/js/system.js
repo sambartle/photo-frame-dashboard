@@ -18,6 +18,7 @@
   var camTimer;
   function closeTakeover() {
     clearInterval(camTimer);
+    App.stopAlarm();
     var el = $('#takeover');
     el.classList.remove('is-open');
     el.innerHTML = '';
@@ -25,7 +26,7 @@
   App.closeTakeover = closeTakeover;
 
   var doorbellTimer;
-  App.doorbell = function () {
+  App.doorbell = function (test) {
     var now = App.now(), cfg = D.alertConfig || {};
     var el = takeover(
       (cfg.doorbellCamera ? '<div class="tk-cam"><img src="' + App.cameraSrc(cfg.doorbellCamera) + '" alt=""><span class="tk-live"><i></i>Front door</span></div>' : '') +
@@ -50,6 +51,7 @@
     });
     clearTimeout(doorbellTimer);
     doorbellTimer = setTimeout(closeTakeover, 45000);
+    App.sound('doorbell', test === true);
     // Near-live: a fresh snapshot every 2 s, swapped in once loaded so the picture never blanks.
     var img = el.querySelector('.tk-cam img');
     clearInterval(camTimer);
@@ -74,6 +76,7 @@
       '    <button class="tk-btn tk-btn--solid tk-btn--light" data-ack>' + App.icon('check', 30) + '<span>Acknowledge</span></button>' +
       '  </div>' +
       '</div>', 'takeover--alarm');
+    App.alarm('leak');
     var v = el.querySelector('[data-valve]');
     if (v) App.hold(v, 1200, {
       done: function () {
@@ -101,6 +104,7 @@
       '    <button class="tk-btn tk-btn--solid tk-btn--light" data-ack>' + App.icon('check', 30) + '<span>Acknowledge</span></button>' +
       '  </div>' +
       '</div>', 'takeover--alarm');
+    App.alarm('smoke');
     el.querySelector('[data-ack]').onclick = function () {
       closeTakeover();
       App.toast((co ? 'CO' : 'Smoke') + ' alarm acknowledged', { icon: 'check' });
@@ -141,6 +145,11 @@
       (tests().length ? '<div class="demo-sec"><div class="label label--light">Test alerts (nothing is sent to the house)</div><div class="demo-test">' +
       '<select id="demoAlert" aria-label="Alert to test">' + tests().map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select>' +
       '<button data-test>Show</button></div></div>' : '') +
+      '<div class="demo-sec"><div class="label label--light">Sound on this frame</div><div class="demo-sound">' +
+      '<button data-mute class="' + (App.soundSettings.muted ? '' : 'is-on') + '">' + (App.soundSettings.muted ? 'Chimes off' : 'Chimes on') + '</button>' +
+      '<input type="range" min="0" max="100" step="5" value="' + Math.round(App.soundSettings.volume * 100) + '" data-volume aria-label="Volume">' +
+      '<span class="demo-vol num">' + Math.round(App.soundSettings.volume * 100) + '%</span></div>' +
+      '<p class="demo-note">Doorbell, leave now and bins chimes; quiet 10 PM – 6 AM and while everyone’s away. Smoke, CO and leak alarms always sound.</p></div>' +
       '<div class="demo-sec"><div class="label label--light">Frames</div><div class="demo-frames" id="demoFrames"><p class="demo-note">Checking…</p></div></div>' +
       '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p>' +
       '<p class="demo-note">Version ' + __APP_VERSION__ + '</p></div>' +
@@ -153,6 +162,7 @@
     t.push(['weather', 'Weather warning']);
     if (D.bins && D.bins.next.length) t.push(['bins', 'Bins out tonight']);
     if (D.hasHome) t.push(['notify', 'Frame notification (sends one)']);
+    t.push(['leavechime', 'Sound: leave now'], ['check', 'Sound check']);
     return t;
   }
   function status() {
@@ -192,6 +202,12 @@
     if (!b) { if (e.target === $('#demo')) closeDemo(); return; }
     if (b.hasAttribute('data-demo-close')) return closeDemo();
     if (b.dataset.mode) { closeDemo(); App.setMode(b.dataset.mode); return; }
+    if (b.hasAttribute('data-mute')) {
+      App.setSound({ muted: !App.soundSettings.muted });
+      if (!App.soundSettings.muted) App.sound('check', true);
+      App.openDemo();
+      return;
+    }
     if (b.hasAttribute('data-fastidle')) {
       var fast = App.idle.home >= 60;
       App.idle.home = fast ? 8 : 60;
@@ -204,7 +220,9 @@
       closeDemo();
       // Previews only: the leak valve and door lock still need a deliberate hold to act, and the
       // weather and bins tests stay on this screen for two minutes without saving anything.
-      ({ doorbell: App.doorbell, leak: App.leak, smoke: function () { App.smoke([{ name: 'Test: Landing', co: false }]); },
+      ({ doorbell: function () { App.doorbell(true); }, leak: App.leak,
+        leavechime: function () { if (!App.sound('leave', true)) App.toast('Sounds are muted on this frame', { icon: 'bell' }); },
+        check: function () { if (!App.sound('check', true)) App.toast('Sounds are muted on this frame', { icon: 'bell' }); }, smoke: function () { App.smoke([{ name: 'Test: Landing', co: false }]); },
         garage: function () { App.garageOpenAlert(15); }, weather: App.testWarning, bins: App.testBins,
         notify: function () {
           App.api('POST', '/frames/test-notify').then(function (r) { App.toast('Test sent to ' + r.sent + (r.sent === 1 ? ' device' : ' devices'), { icon: 'check' }); },
@@ -220,6 +238,14 @@
 
   App.on('ready', function () {
     $('#demo').addEventListener('click', demoClick);
+    // Volume: follows the slider; a check sound when let go, so it can be set by ear.
+    $('#demo').addEventListener('input', function (e) {
+      if (!e.target.hasAttribute('data-volume')) return;
+      App.setSound({ volume: +e.target.value / 100 });
+      var lbl = $('#demo .demo-vol');
+      if (lbl) lbl.textContent = e.target.value + '%';
+    });
+    $('#demo').addEventListener('change', function (e) { if (e.target.hasAttribute('data-volume')) App.sound('check', true); });
     App.hold($('#railClock'), 700, { done: App.openDemo });
     document.addEventListener('keydown', function (e) {
       if (e.target.tagName === 'INPUT') return;

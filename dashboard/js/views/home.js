@@ -1,7 +1,7 @@
 // Home / Today: the glanceable overview. Never scrolls.
 (function () {
   'use strict';
-  var D = window.DATA, V = {};
+  var D = window.DATA, V = { chimed: {} };
 
   function clock() {
     var n = App.now();
@@ -111,6 +111,8 @@
       } else if (leave <= 0 && stillHome) {
         var late = Math.floor(-leave);
         tone = late < 3 ? ' is-go' : ' is-late';
+        // One chime per event, when it's time to go (App.sound stays quiet at night or when away).
+        if (late < 3 && !V.chimed[e.id]) { V.chimed[e.id] = true; App.sound('leave'); }
         kicker = late < 3 ? 'Leave now' : 'Running late';
         big = late < 3
           ? '<div class="h-hero-count num">' + App.icon('car', 110) + '<small>leave now</small></div>'
@@ -353,6 +355,7 @@
   var binBanner = null;
   function showBinBanner(due) {
     if (binBanner) binBanner();
+    App.sound('bins', !!due.test);
     var names = due.c.bins.map(function (b) { return ((D.bins.types || {})[b] || { name: b }).name; }).join(' and ');
     binBanner = App.banner({
       tone: 'ink', icon: 'bell', title: App.esc(names) + (due.c.bins.length > 1 ? ' bins' : ' bin') + ' out tonight',
