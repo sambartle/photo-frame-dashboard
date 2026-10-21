@@ -65,6 +65,7 @@
       D.photos = merge(D.photos, s.photos);
       D.hasHome = s.hasHome; D.scenes = s.scenes; D.cameras = s.cameras;
       D.bins = s.bins || null;
+      D.notes = s.notes || [];
       D.awayOffMinutes = s.awayOffMinutes || 0;
       App.$$('.rail-item[data-go="control"], .rail-item[data-go="media"]').forEach(function (r) { r.hidden = !D.hasHome; });
     },

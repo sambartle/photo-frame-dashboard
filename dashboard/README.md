@@ -418,6 +418,14 @@ this frame** in the display controls mutes the chimes and sets a volume, both re
 on top of Android's media volume (the frame's volume buttons, where it has them). Test alerts plays
 each sound, and **Sound check** plays a tone.
 
+**Notes.** The **Note** button in the frame's left menu, or **Notes** on the phone page, pins a short
+note (140 characters) on every frame: from someone, for everyone or one person, kept until someone
+taps **Done** or until tonight, tomorrow evening or a date. On Today the newest three float
+bottom-left, tinted in the writer's colour; other tabs show a "2 notes" pill; the photo screen shows
+the newest; night mode and screen-off hide them. A note for one person also goes to their phone when
+`settings.json` gives that person a `"notify": "notify.mobile_app_…"`. Frames chime when a new one
+arrives (quiet at night). Only the frame a note was written on offers **Edit**.
+
 **Frames** in the display controls lists every wall display that has checked in (each does every
 5 minutes): its dashboard and kiosk versions, Wi-Fi signal (kiosk 1.2) and when it was last seen.
 One quiet for 15 minutes turns red there and shows a warning on the phone page. Only the kiosk

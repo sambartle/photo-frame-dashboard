@@ -42,6 +42,7 @@
     leave: function (c, o) { note(c, o, 523.3, 0, 0.35); note(c, o, 659.3, 0.13, 0.35); note(c, o, 784, 0.26, 0.6); },
     bins: function (c, o) { note(c, o, 392, 0, 0.7, 'sine', 0.35); note(c, o, 523.3, 0.28, 0.9, 'sine', 0.35); },
     check: function (c, o) { note(c, o, 880, 0, 0.5, 'sine', 0.5); },
+    note: function (c, o) { note(c, o, 784, 0, 0.25, 'sine', 0.35); note(c, o, 1046.5, 0.12, 0.5, 'sine', 0.35); },
     smoke: function (c, o) { [0, 0.3, 0.6].forEach(function (t) { note(c, o, 3100, t, 0.18, 'square', 0.25); }); },
     leak: function (c, o) { note(c, o, 880, 0, 0.3, 'triangle', 0.5); note(c, o, 660, 0.35, 0.3, 'triangle', 0.5); }
   };

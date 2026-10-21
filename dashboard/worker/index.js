@@ -25,7 +25,9 @@ const CFG = (function () {
   const people = (RAW.people || []).map((p) => {
     const [r, g, b] = hexRgb(p.color || '#888888');
     const light = (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62;
-    return { id: p.id, name: p.name, color: p.color, rgb: r + ' ' + g + ' ' + b, ink: light ? '#111111' : '#FFFFFF', ha: p.ha };
+    // notify: a Home Assistant notify service (notify.mobile_app_…) for notes addressed to them.
+    return { id: p.id, name: p.name, color: p.color, rgb: r + ' ' + g + ' ' + b, ink: light ? '#111111' : '#FFFFFF', ha: p.ha,
+      notify: /^notify\.\w+$/.test(p.notify || '') ? p.notify : null };
   });
   const shop = RAW.shopping || {};
   const cats = shop.categories || ['Other'];
@@ -200,12 +202,45 @@ async function checkFrames(env) {
     .bind('frame-alerts', JSON.stringify(alerted), now + 365 * 864e5).run();
 }
 
+// ------------------------------------------------------------------ sticky notes
+// Short notes for the household, written on a frame or the phone page and shown on every frame
+// until cleared or expired. A note for one person also goes to their phone (people[].notify).
+const NOTE_MAX = 140;
+async function liveNotes(env) {
+  const rows = await env.DB.prepare('SELECT id, text, from_id, to_id, created, expires FROM notes WHERE cleared IS NULL AND (expires IS NULL OR expires > ?) ORDER BY created DESC LIMIT 20')
+    .bind(Date.now()).all();
+  return rows.results.map((n) => ({ id: n.id, text: n.text, from: n.from_id, to: n.to_id, created: n.created, expires: n.expires }));
+}
+async function putNote(env, b) {
+  const id = str(b.id, 40), text = str(b.text, NOTE_MAX);
+  const person = (pid) => CFG.people.find((p) => p.id === pid);
+  const to = b.to === 'all' || person(b.to) ? b.to : 'all';
+  const expires = typeof b.expires === 'number' && b.expires > Date.now() ? b.expires : null;
+  if (!/^[a-z0-9]{6,40}$/.test(id) || !text || !person(b.from)) return bad('id, text and from (a person) required');
+  const old = await env.DB.prepare('SELECT id FROM notes WHERE id = ?').bind(id).first();
+  await env.DB.prepare('INSERT INTO notes (id, text, from_id, to_id, created, expires, cleared) VALUES (?, ?, ?, ?, ?, ?, NULL) ' +
+    'ON CONFLICT(id) DO UPDATE SET text = excluded.text, to_id = excluded.to_id, expires = excluded.expires')
+    .bind(id, text, b.from, to, Date.now(), expires).run();
+  // A new note for one person: tell their phone too. Best effort; the note is saved either way.
+  const target = !old && to !== 'all' && person(to), from = person(b.from);
+  if (target && target.notify && CFG.home && env.HA_TOKEN) {
+    await haService(env, 'notify', target.notify.split('.')[1], { title: '📌 Note from ' + from.name, message: text, data: { tag: 'homehq-note-' + id, group: 'homehq' } })
+      .catch((err) => console.warn('note push', err.message));
+  }
+  return json({ ok: true, notes: await liveNotes(env) });
+}
+async function clearNote(env, id, undo) {
+  await env.DB.prepare('UPDATE notes SET cleared = ? WHERE id = ?').bind(undo ? null : Date.now(), id).run();
+  return json({ ok: true, notes: await liveNotes(env) });
+}
+
 // ------------------------------------------------------------------ state (shopping, photos, bins)
 async function getState(env) {
-  const [groceries, photos, bins] = await Promise.all([
+  const [groceries, photos, bins, notes] = await Promise.all([
     env.DB.prepare('SELECT id, name, cat, qty, store, note, done FROM groceries WHERE cleared = 0 ORDER BY updated_at').all(),
     env.DB.prepare('SELECT id, o, date, place, from_id, fav FROM photos ORDER BY date DESC').all(),
     binsState(env),
+    liveNotes(env),
   ]);
   return {
     people: CFG.people.map((p) => ({ id: p.id, name: p.name, color: p.color, rgb: p.rgb, ink: p.ink, tracked: !!(p.ha && CFG.home) })),
@@ -214,7 +249,7 @@ async function getState(env) {
     photos: photos.results.map((p) => ({ id: p.id, o: p.o, date: p.date, place: p.place, from: p.from_id, fav: !!p.fav, tag: p.date })),
     hasHome: !!CFG.home,
     scenes: CFG.scenes, cameras: CFG.cameras,
-    bins,
+    bins, notes,
     // Minutes everyone known to Home Assistant must be away before the screen turns off (0 = never).
     awayOffMinutes: CFG.display.awayOffMinutes || 0,
   };
@@ -995,6 +1030,9 @@ async function api(req, env, url) {
     await env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('frame:' + r[1]).run();
     return json({ ok: true });
   }
+  if (p === '/notes' && m === 'POST') return putNote(env, await body(req));
+  if ((r = /^\/notes\/([a-z0-9]{6,40})$/.exec(p)) && m === 'DELETE') return clearNote(env, r[1], false);
+  if ((r = /^\/notes\/([a-z0-9]{6,40})\/restore$/.exec(p)) && m === 'POST') return clearNote(env, r[1], true);
   if (p === '/groceries' && m === 'POST') return putGrocery(env, await body(req));
   if (p === '/groceries/clear' && m === 'POST') return clearGroceries(env, await body(req));
 

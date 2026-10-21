@@ -33,6 +33,17 @@
       <div id="shopList"></div>
     </section>
 
+    <section id="tab-notes" class="tab" hidden>
+      <form class="note-form" id="noteForm" autocomplete="off">
+        <textarea id="noteText" maxlength="140" rows="3" placeholder="Leave a note on the frames…" aria-label="Note"></textarea>
+        <div class="note-row"><span class="label">From</span><div class="seg" id="noteFrom"></div></div>
+        <div class="note-row"><span class="label">For</span><div class="seg" id="noteFor"></div></div>
+        <div class="note-row"><span class="label">Keep</span><div class="seg" id="noteKeep"></div></div>
+        <button type="submit" class="note-pin">Pin note</button>
+      </form>
+      <div id="noteList"></div>
+    </section>
+
 
     <div class="msg" id="locked" hidden>
       <b>Not connected.</b> Open this page once with <code>?key=</code> and the dashboard key on the end of
@@ -44,6 +55,7 @@
 
   <nav class="tabs">
     <button data-tab="shopping" class="is-on"><span>🛒</span>Shopping</button>
+    <button data-tab="notes"><span>📌</span>Notes</button>
     <a href="/upload"><span>🖼️</span>Photos</a>
     <a href="/?wall"><span>🖥️</span>Wall view</a>
   </nav>

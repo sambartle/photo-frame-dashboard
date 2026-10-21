@@ -18,7 +18,7 @@
   },
 
   "people": [
-    { "id": "sam", "name": "Sam", "color": "#2D5BFF", "ha": "person.sam" },
+    { "id": "sam", "name": "Sam", "color": "#2D5BFF", "ha": "person.sam", "notify": "notify.mobile_app_sams_phone" },
     { "id": "alex", "name": "Alex", "color": "#E4007C", "ha": "person.alex" },
     { "id": "maya", "name": "Maya", "color": "#00A36C" },
     { "id": "otto", "name": "Otto", "color": "#FFB000" }

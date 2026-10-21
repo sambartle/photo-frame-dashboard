@@ -169,16 +169,63 @@ function onShopClick(e) {
 }
 
 // ------------------------------------------------------------ tabs + boot
-function render() { renderList(); }
+// ------------------------------------------------------------ sticky notes (shown on the frames)
+var NS = { from: null, to: 'all', keep: 'cleared' };
+try { NS.from = localStorage.getItem('hq-note-from'); } catch (e) {}
+function segHTML(items, on, attr) {
+  return items.map(function (x) { return '<button type="button" data-' + attr + '="' + x[0] + '" class="' + (x[0] === on ? 'is-on' : '') + '">' + esc(x[1]) + '</button>'; }).join('');
+}
+function renderNotes() {
+  if (!S.data) return;
+  var people = S.data.people || [];
+  if (!NS.from || !people.some(function (p) { return p.id === NS.from; })) NS.from = people[0] && people[0].id;
+  var names = people.map(function (p) { return [p.id, p.name]; });
+  $('#noteFrom').innerHTML = segHTML(names, NS.from, 'from');
+  $('#noteFor').innerHTML = segHTML([['all', 'Everyone']].concat(names), NS.to, 'to');
+  $('#noteKeep').innerHTML = segHTML([['cleared', 'Until cleared'], ['tonight', 'Tonight'], ['tomorrow', 'Tomorrow evening']], NS.keep, 'keep');
+  var notes = S.data.notes || [], who = function (id) { var p = people.filter(function (x) { return x.id === id; })[0]; return p ? p.name : id; };
+  $('#noteList').innerHTML = notes.length ? '<div class="group"><h2><span>On the frames</span><span>' + notes.length + '</span></h2>' + notes.map(function (n) {
+    return '<div class="note-card" data-note="' + n.id + '"><p class="serif">' + esc(n.text) + '</p><small>– ' + esc(who(n.from)) +
+      (n.to !== 'all' ? ' · for ' + esc(who(n.to)) : '') + '</small><button type="button" data-clear>Done</button></div>';
+  }).join('') + '</div>' : '<div class="empty">No notes on the frames.</div>';
+}
+
+function render() { renderList(); renderNotes(); }
 function showTab(name) {
   S.tab = name;
+  $('#title').textContent = name === 'notes' ? 'Notes' : 'Shopping';
   $('#tab-shopping').hidden = name !== 'shopping';
+  $('#tab-notes').hidden = name !== 'notes';
   Array.prototype.forEach.call(document.querySelectorAll('.tabs [data-tab]'), function (b) { b.classList.toggle('is-on', b.dataset.tab === name); });
 }
 
 document.querySelector('.tabs').addEventListener('click', function (e) {
   var b = e.target.closest('[data-tab]');
   if (b) showTab(b.dataset.tab);
+});
+$('#tab-notes').addEventListener('click', function (e) {
+  var b = e.target.closest('button');
+  if (!b) return;
+  ['from', 'to', 'keep'].forEach(function (k) { if (b.dataset[k] != null) { NS[k] = b.dataset[k]; renderNotes(); } });
+  if (b.dataset.from) try { localStorage.setItem('hq-note-from', b.dataset.from); } catch (err) {}
+  if (b.hasAttribute('data-clear')) {
+    var id = b.closest('[data-note]').dataset.note;
+    S.data.notes = S.data.notes.filter(function (n) { return n.id !== id; });
+    renderNotes();
+    save('DELETE', '/notes/' + id).then(function (r) { S.data.notes = r.notes; renderNotes(); });
+  }
+});
+$('#noteForm').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var text = $('#noteText').value.trim();
+  if (!text) return $('#noteText').focus();
+  var mid = new Date(); mid.setHours(24, 0, 0, 0);
+  var expires = NS.keep === 'tonight' ? +mid : NS.keep === 'tomorrow' ? +mid + 20 * 36e5 : null;
+  var note = { id: uid(), text: text, from: NS.from, to: NS.to, expires: expires, created: Date.now() };
+  S.data.notes = [note].concat(S.data.notes || []);
+  $('#noteText').value = '';
+  renderNotes();
+  save('POST', '/notes', note).then(function (r) { S.data.notes = r.notes; renderNotes(); toast('Pinned on the frames'); });
 });
 $('#addForm').addEventListener('submit', function (e) {
   e.preventDefault();

@@ -4,7 +4,7 @@
 (function () {
   'use strict';
   var D = window.DATA, V = {};
-  D.players = [];
+  D.players = D.players || []; // sync.js may already have restored them from the saved copy
   // Home Assistant's supported_features bits
   var F = { PAUSE: 1, VOLUME: 4, MUTE: 8, PREV: 16, NEXT: 32, ON: 128, OFF: 256, PLAY: 16384 };
   var has = function (p, f) { return (p.features & f) === f; };

@@ -182,6 +182,7 @@
     if (!view._built || view._dirty || opts.rerender || (view.minutely && view._min !== minuteKey())) build(name, opts);
     else if (view.resume) view.resume($('#view-' + name));
     if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+    App.emit('view', name);
   };
   // Build a hidden view and lay it out now (cached by content-visibility; no paint happens).
   function prebuild(name) {
