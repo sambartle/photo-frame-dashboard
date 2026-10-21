@@ -190,7 +190,7 @@
     var when = days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : App.fmt.day(day) + ' ' + day.getDate() + ' ' + App.fmt.monthShort(day);
     var right = due
       ? (due.out ? '<span class="h-bins-go is-done">' + App.icon('check', 22) + 'Out</span>' : '<span class="h-bins-go">' + (due.tonight ? 'Put out tonight' : 'Put out now') + '</span>')
-      : '<span class="h-bins-in num">' + (days === 0 ? 'today' : days === 1 ? 'tomorrow' : 'in ' + days + ' days') + '</span>';
+      : (days > 1 ? '<span class="h-bins-in num">in ' + days + ' days</span>' : ''); // today/tomorrow: the label already says
     return '<div class="h-bins-icons">' + icons + '</div>' +
       '<div class="h-bins-text"><span class="label' + (due && !due.out ? ' label--light' : '') + '">Bins · ' + when + '</span>' +
       '<span class="h-bins-what"><b>' + App.esc(binNames(c)) + '</b>' + (what ? ' · ' + App.esc(what) : '') + '</span></div>' + right;
