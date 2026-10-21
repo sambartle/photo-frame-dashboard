@@ -153,7 +153,7 @@
       '<div class="demo-sec"><div class="label label--light">Frames</div><div class="demo-frames" id="demoFrames"><p class="demo-note">Checking…</p></div></div>' +
       '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p>' +
       '<p class="demo-note">Version ' + __APP_VERSION__ + '</p></div>' +
-      '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–5</b> views</p>' +
+      '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–6</b> views</p>' +
       '</div>';
   }
   // [id, label]: Home Assistant alerts only when it's set up; weather and bins work without it.
@@ -254,8 +254,8 @@
       if (k === 'a') App.setMode('ambient');
       if (k === 'n') App.setMode('night');
       if (k === 'escape') { closeDemo(); App.closeSheet(); }
-      var views = ['home', 'calendar', 'shopping', 'photos', 'control'];
-      if (k >= '1' && k <= '5') App.go(views[+k - 1]);
+      var views = ['home', 'calendar', 'shopping', 'photos', 'control', 'media'];
+      if (k >= '1' && k <= '6') App.go(views[+k - 1]);
     });
   });
 })();

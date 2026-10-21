@@ -335,7 +335,7 @@ entities listed in `settings.json` can be read or controlled through the dashboa
 4. **The `home` section** in `settings.json`:
    - `url`: the address from step 1.
    - `rooms`: each with its `devices`, as `{ "entity": "light.kitchen", "name": "Kitchen" }`.
-   - optionally `climate`, `media`, `cameras`, `scenes` and `alerts`. See `settings.example.json` and the
+   - optionally `climate`, `cameras`, `scenes`, `players` and `alerts`. See `settings.example.json` and the
      table below.
 
    Add `"ha": "person.sam"` to each person who has a `person.` entity. Find entity ids in
@@ -361,9 +361,15 @@ To turn Home Assistant off, remove the `home` section and deploy; the Home tab d
 | `cover.*` | Blind; `"garage": true` or `device_class: garage` makes it a garage door | `set_cover_position`, `open_cover`, `close_cover` |
 | `lock.*` | Lock (hold to unlock, tap to lock) | `lock`, `unlock` |
 | `climate` | Thermostat panel | `set_temperature`, `set_hvac_mode` |
-| `media` | Now playing | `media_play_pause` |
+| every `media_player.*` | The **Media** tab: one card per player, playing first | `media_play_pause`, `media_previous_track`, `media_next_track`, `volume_set`, `volume_mute`, `turn_on`, `turn_off` |
 | `scenes` | Scene buttons | `scene.turn_on` |
 | `cameras` | Snapshots, refreshed every 20 s while the Home tab is open | `camera_proxy` |
+
+The **Media** tab finds every media player by itself. Integrations often register one speaker
+several times (Cast and Assistant, old TV entries), so players are merged by name, keeping the most
+active, and unavailable ones stay hidden until they're back. To tidy the list, add
+`"players": { "exclude": ["media_player.x"], "names": { "media_player.y": "Kitchen" } }` to `home`.
+Controls appear only where the player supports them.
 
 `alerts` turns Home Assistant state into full-screen alerts on the frame. The frame polls every 10
 seconds, so an alert can take up to 10 s to appear:

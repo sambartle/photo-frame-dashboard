@@ -83,12 +83,6 @@
 .cam::after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: linear-gradient(0deg, rgba(0, 0, 0, .6), rgba(0, 0, 0, 0) 55%); }
 .cam-name { position: absolute; left: 10px; bottom: 8px; z-index: 1; font-size: var(--fs-min); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .cam-age { position: absolute; right: 8px; top: 8px; z-index: 1; font-size: 13px; font-weight: 700; padding: 3px 7px; border-radius: 6px; background: rgba(0, 0, 0, .5); font-variant-numeric: tabular-nums; }
-.hc-media { display: flex; align-items: center; gap: 14px; padding: 12px; margin-top: auto; }
-.np-art { width: 76px; height: 76px; border-radius: 10px; object-fit: cover; background: var(--paper-2); }
-.np-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.np-text b { font-size: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-text > span:last-child { font-size: 16px; color: var(--mute); }
-.np-btn { width: var(--tap); height: var(--tap); border-radius: 50%; background: var(--ink); color: var(--paper); display: grid; place-items: center; }
 
 /* garage slide-to-confirm */
 .slide-confirm { position: relative; height: 88px; border-radius: 999px; background: var(--paper-2); overflow: hidden; touch-action: none; }
@@ -110,5 +104,4 @@
 .hc-offline { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 18px 20px; border-radius: 18px; background: var(--card); color: var(--alert); }
 .hc-offline span { display: flex; flex-direction: column; color: inherit; }
 .hc-offline b { font-size: 20px; }
-.np-art--none { display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .06); }
-.hc-climate[hidden], .hc-media[hidden], .hc-scenes[hidden], .rail-item[hidden] { display: none; }
+.hc-climate[hidden], .hc-scenes[hidden], .rail-item[hidden] { display: none; }

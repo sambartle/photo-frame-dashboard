@@ -1,4 +1,5 @@
-// Home control: status summary, scenes, rooms of tiles, climate, cameras, media — via Home Assistant
+// Home control: status summary, scenes, rooms of tiles, climate, cameras — via Home Assistant.
+// Media players have their own tab (views/media.js).
 // (the Worker maps each change to an HA service call; see worker/index.js controlDevice).
 (function () {
   'use strict';
@@ -75,13 +76,12 @@
     var unlocked = locks.filter(function (d) { return !d.locked; });
     var garage = garageDev(), gOpen = garage && garage.state !== 'closed';
     var secure = !unlocked.length && !gOpen;
-    var m = D.media, out = []; // climate has its own panel on the right
+    var out = []; // climate has its own panel on the right; media has its own tab
     out.push('<button class="sum' + (lights.length ? ' sum--warm' : '') + '" data-sum="lights"><span class="label">Lights</span><b class="num">' + lights.length + '</b><small>on in ' + unique(lights.map(function (l) { return l.room; })).length + ' rooms</small></button>');
     if (locks.length || garage) out.push('<button class="sum' + (secure ? '' : ' sum--warn') + '" data-sum="security"><span class="label">Security</span><b class="num">' + (secure ? 'Locked' : unlocked.length + (gOpen ? 1 : 0)) + '</b><small>' + (secure ? (garage ? 'All doors + garage' : 'All doors') : (gOpen ? 'Garage ' + garage.state : '') + (unlocked.length ? (gOpen ? ' · ' : '') + unlocked.map(function (u) { return u.name; }).join(', ') : '') + ' open') + '</small></button>');
     var E = D.energy, T = D.energyToday;
     if (E) out.push('<button class="sum' + (E.high ? ' sum--warn' : '') + '" data-sum="energy"><span class="label">Energy</span><b class="num">' + App.fmtWatts(E.watts) + '</b><small>' +
       (T ? T.total.toFixed(1) + ' kWh today' : 'now · tap for today') + '</small></button>');
-    if (m) out.push('<button class="sum" data-sum="media"><span class="label">Media</span><b class="num">' + (m.playing ? 'Playing' : 'Paused') + '</b><small>' + App.esc(m.room) + '</small></button>');
     return out.join('');
   }
   function unique(a) { return a.filter(function (x, i) { return a.indexOf(x) === i; }); }
@@ -133,14 +133,6 @@
     }).join('') + '</div>';
   }
 
-  function media() {
-    var m = D.media;
-    if (!m) return '';
-    return (m.art ? '<img class="np-art" src="' + m.art + '" alt="">' : '<span class="np-art np-art--none">' + App.icon('music', 40) + '</span>') +
-      '<div class="np-text"><span class="label">' + App.esc(m.room) + '</span><b>' + App.esc(m.title) + '</b><span>' + App.esc(m.artist) + '</span></div>' +
-      '<button class="np-btn" data-play aria-label="Play/Pause">' + App.icon(m.playing ? 'pause' : 'play', 30) + '</button>';
-  }
-
   // Granular updates: an action repaints only what it touched (full paint() rebuilds ~270 nodes,
   // which costs ~350ms on the wall tablet).
   function paintTile(id) {
@@ -175,9 +167,8 @@
     bindTiles(rs);
     el.querySelector('.hc-sum').style.gridTemplateColumns = 'repeat(' + Math.max(1, el.querySelector('.hc-sum').children.length) + ',1fr)';
     el.querySelector('.hc-scenes').hidden = !D.scenes.length;
-    var cl = el.querySelector('.hc-climate'), md = el.querySelector('.hc-media');
+    var cl = el.querySelector('.hc-climate');
     cl.innerHTML = climate(); cl.hidden = !D.climate;
-    md.innerHTML = media(); md.hidden = !D.media;
   }
 
   // ------------------------------------------------------------ tile gestures
@@ -322,8 +313,6 @@
       var k = t.dataset.sum;
       if (k === 'lights' || k === 'security') return listSheet(k);
       if (k === 'energy') return App.energySheet();
-      var target = V.el.querySelector(k === 'climate' ? '.hc-climate' : '.hc-media');
-      target.classList.add('is-pulse'); setTimeout(function () { target.classList.remove('is-pulse'); }, 900);
       return;
     }
     if ((t = e.target.closest('[data-temp]'))) {
@@ -341,11 +330,6 @@
       return climateChanged();
     }
     if ((t = e.target.closest('[data-cam]'))) return App.cameraSheet(D.cameras.filter(function (c) { return c.id === t.dataset.cam; })[0]);
-    if ((t = e.target.closest('[data-play]'))) {
-      D.media.playing = !D.media.playing;
-      paintPart('.hc-media', media()); paintPart('.hc-sum', summary());
-      App.write('home', 'POST', '/home/media', {}).then(settle);
-    }
   }
   function climateChanged() { paintPart('.hc-climate', climate()); paintPart('.hc-sum', summary()); App.emit('data'); }
 
@@ -368,7 +352,7 @@
         V.el = el;
         el.innerHTML = '<div class="hc">' +
           '<div class="hc-left"><div class="hc-sum"></div><div class="hc-scenes"></div><div class="hc-rooms"></div></div>' +
-          '<div class="hc-right"><div class="hc-climate"></div><div class="hc-cams"></div><div class="hc-media card"></div></div>' +
+          '<div class="hc-right"><div class="hc-climate"></div><div class="hc-cams"></div></div>' +
           '</div>';
         el.addEventListener('click', onClick);
       }

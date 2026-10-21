@@ -644,6 +644,7 @@ async function getHome(env) {
       garageOpenSince: garage && garage.state !== 'closed' && by[garage.id] ? by[garage.id].last_changed : null,
     },
     energy: energyView(H.energy, by),
+    players: playersView(H, states),
     checks: checksView(al, by),
     alertConfig: {
       doorbell: !!al.doorbell, doorbellCamera: al.doorbell && al.doorbell.camera || null, doorbellLock: al.doorbell && al.doorbell.lock || null,
@@ -651,6 +652,57 @@ async function getHome(env) {
       garageOpenMinutes: al.garageOpenMinutes || 0,
     },
   };
+}
+
+// ------------------------------------------------------------------ media players
+// Every media_player Home Assistant has, for the Media tab. Integrations often register one device
+// several times (Cast and Assistant SDK, old TV entries), so players are merged by name, keeping
+// the most active; unavailable ones are left out until they come back. home.players: { "exclude":
+// [entity ids], "names": { entity id: name } } tidies the list.
+const MEDIA_RANK = { playing: 0, paused: 1, buffering: 1, idle: 2, on: 3, standby: 4, off: 5 };
+function mediaAllowed(H, id) {
+  const P = H.players || {};
+  return /^media_player\.\w+$/.test(id) && (P.exclude || []).indexOf(id) < 0;
+}
+function playersView(H, states) {
+  const P = H.players || {}, best = {};
+  states.forEach((s) => {
+    if (s.entity_id.indexOf('media_player.') !== 0 || !mediaAllowed(H, s.entity_id) || !(s.state in MEDIA_RANK)) return;
+    const a = s.attributes || {}, name = (P.names || {})[s.entity_id] || a.friendly_name || s.entity_id;
+    const prev = best[name];
+    if (prev && MEDIA_RANK[prev.state] <= MEDIA_RANK[s.state]) return;
+    best[name] = {
+      id: s.entity_id, name, state: s.state,
+      title: a.media_title || '', artist: a.media_artist || a.media_album_name || '', app: a.app_name || '',
+      // Something to resume: playing, paused, or idle with media still loaded. An idle player with
+      // nothing loaded (a Cast or Music Assistant speaker after it finishes) can't play, skip or go back.
+      loaded: s.state === 'playing' || s.state === 'paused' || !!(a.media_content_id || a.media_title),
+      volume: typeof a.volume_level === 'number' ? Math.round(a.volume_level * 100) : null, muted: !!a.is_volume_muted,
+      art: a.entity_picture ? '/api/ha/art?id=' + encodeURIComponent(s.entity_id) + '&v=' + encodeURIComponent(a.entity_picture.slice(-24)) : null,
+      features: a.supported_features || 0,
+    };
+  });
+  return Object.values(best).sort((x, y) => MEDIA_RANK[x.state] - MEDIA_RANK[y.state] || (x.name < y.name ? -1 : 1));
+}
+const MEDIA_DO = {
+  play_pause: ['media_play_pause'], next: ['media_next_track'], previous: ['media_previous_track'],
+  on: ['turn_on'], off: ['turn_off'],
+  volume: ['volume_set', (v) => ({ volume_level: Math.max(0, Math.min(100, +v || 0)) / 100 })],
+  mute: ['volume_mute', (v) => ({ is_volume_muted: !!v })],
+};
+async function mediaControl(env, id, b) {
+  const op = MEDIA_DO[b.do];
+  if (!op || !mediaAllowed(CFG.home, id)) return bad('unknown player or action', 404);
+  try {
+    await haService(env, 'media_player', op[0], Object.assign({ entity_id: id }, op[1] ? op[1](b.value) : {}));
+  } catch (err) {
+    // Home Assistant answers 500 when the player can't do it (nothing loaded, or it's asleep).
+    const s = await ha(env, '/api/states/' + id).then((r) => r.ok ? r.json() : null).catch(() => null);
+    const name = (s && s.attributes && s.attributes.friendly_name) || id;
+    const why = /^(play_pause|next|previous)$/.test(b.do) ? 'nothing to play or resume' : 'it didn’t accept that';
+    return bad(name + ': ' + why, 409);
+  }
+  return json({ ok: true });
 }
 
 // The "all clear" line: sensors behind the alerts that have gone quiet, the water main, and low
@@ -795,8 +847,9 @@ async function haImage(env, which, url) {
     if (!ok) return bad('unknown camera', 404);
     path = '/api/camera_proxy/' + id;
   } else {
-    if (!CFG.home.media) return bad('no media player', 404);
-    const s = await ha(env, '/api/states/' + CFG.home.media);
+    const id = which === 'art' ? url.searchParams.get('id') : CFG.home.media;
+    if (!id || (which === 'art' && !mediaAllowed(CFG.home, id))) return bad('no media player', 404);
+    const s = await ha(env, '/api/states/' + id);
     const pic = s.ok && (await s.json()).attributes.entity_picture;
     if (!pic) return new Response(null, { status: 404 });
     if (/^https?:/.test(pic)) return fetch(pic);
@@ -875,8 +928,9 @@ async function api(req, env, url) {
     if (p === '/home' && m === 'GET') return json(await getHome(env));
     if (p === '/home/energy' && m === 'GET') return json(await energyToday(env));
     if ((r = /^\/home\/device\/([\w.]+)$/.exec(p)) && m === 'POST') return controlDevice(env, r[1], await body(req));
+    if ((r = /^\/home\/media\/(media_player\.\w+)$/.exec(p)) && m === 'POST') return mediaControl(env, r[1], await body(req));
     if ((r = /^\/home\/([\w-]+)$/.exec(p)) && m === 'POST') return homeAction(env, r[1], await body(req));
-    if (p === '/ha/camera' || p === '/ha/media') return haImage(env, p.slice(4), url);
+    if (p === '/ha/camera' || p === '/ha/media' || p === '/ha/art') return haImage(env, p.slice(4), url);
   }
   return bad('not found', 404);
 }
