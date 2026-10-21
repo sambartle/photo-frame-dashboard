@@ -1,6 +1,7 @@
 // Upload secrets.json to the Worker as Cloudflare secrets: DASHBOARD_KEY, HA_TOKEN, CALENDARS and
 // GOOGLE_MAPS_KEY (optional: live drive times for events with a location) and
-// GOOGLE_SERVICE_ACCOUNT (optional: events added on the frame are written to Google Calendar).
+// GOOGLE_SERVICE_ACCOUNT (optional: events added on the frame are written to Google Calendar) and
+// ALERT_TOKEN (optional: lets Home Assistant push urgent alerts; see `npm run ha-alerts`).
 // Cloudflare never shows a secret again, so secrets.json is your only readable copy: keep it out
 // of git (refused below) and out of synced folders, and back it up somewhere safe.
 //
@@ -42,6 +43,9 @@ if (token && token.split('.').length !== 3) fail('HA_TOKEN doesn’t look like a
 const maps = typeof S.GOOGLE_MAPS_KEY === 'string' ? S.GOOGLE_MAPS_KEY.trim() : '';
 if (maps && !/^AIza[\w-]{30,}$/.test(maps)) fail('GOOGLE_MAPS_KEY doesn’t look like a Google API key (starts with AIza).');
 
+const alertToken = typeof S.ALERT_TOKEN === 'string' ? S.ALERT_TOKEN.trim() : '';
+if (alertToken && !/^[A-Za-z0-9]{24,}$/.test(alertToken)) fail('ALERT_TOKEN should be 24+ letters and digits (openssl rand -hex 16).');
+
 const sa = S.GOOGLE_SERVICE_ACCOUNT;
 if (sa && typeof sa === 'object' && Object.keys(sa).some((k) => k[0] !== '_')) { // "_note" alone = blank
   if (sa.type !== 'service_account' || !sa.client_email || !/BEGIN PRIVATE KEY/.test(sa.private_key || '')) {
@@ -70,9 +74,10 @@ if (key) out.DASHBOARD_KEY = key;
 if (token) out.HA_TOKEN = token;
 if (cals && cals.length) out.CALENDARS = JSON.stringify(cals);
 if (maps) out.GOOGLE_MAPS_KEY = maps;
+if (alertToken) out.ALERT_TOKEN = alertToken;
 if (sa && typeof sa === 'object' && sa.private_key) out.GOOGLE_SERVICE_ACCOUNT = JSON.stringify(sa);
 const names = Object.keys(out);
-const skipped = ['DASHBOARD_KEY', 'HA_TOKEN', 'CALENDARS', 'GOOGLE_MAPS_KEY', 'GOOGLE_SERVICE_ACCOUNT'].filter((n) => !out[n]);
+const skipped = ['DASHBOARD_KEY', 'HA_TOKEN', 'CALENDARS', 'GOOGLE_MAPS_KEY', 'GOOGLE_SERVICE_ACCOUNT', 'ALERT_TOKEN'].filter((n) => !out[n]);
 console.log('secrets.json OK: ' + (names.join(', ') || 'nothing filled in') + (skipped.length ? ' (blank, skipped: ' + skipped.join(', ') + ')' : '') +
   (cals && cals.length ? '; ' + cals.length + ' calendar(s), for ' + cals.map((c) => [].concat(c.people).join('+')).join(', ') : '') +
   (out.GOOGLE_SERVICE_ACCOUNT ? '; frame events written to Google as ' + sa.client_email + ' (share each calendar with it)' : ''));

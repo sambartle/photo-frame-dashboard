@@ -197,5 +197,17 @@
       });
     }, 5000);
     window.addEventListener('online', function () { Object.keys(PERIOD).forEach(refresh); });
+    // Pushed alerts: Home Assistant bumps a counter on the Worker the moment the doorbell, a smoke
+    // alarm or a leak sensor changes. Checked every 2 s in every mode (the Home poll slows to 60 s
+    // on the photo screen and at night); when it moves, refresh Home now and the alerts fire.
+    var alertSeen = null, alertBusy = false;
+    setInterval(function () {
+      if (locked || !D.hasHome || alertBusy) return;
+      alertBusy = true;
+      request('GET', '/alerts').then(function (a) {
+        if (alertSeen !== null && a.seq !== alertSeen) refresh('home');
+        alertSeen = a.seq;
+      }, function () {}).then(function () { alertBusy = false; });
+    }, 2000);
   });
 })();

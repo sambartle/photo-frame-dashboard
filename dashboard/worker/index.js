@@ -202,6 +202,30 @@ async function checkFrames(env) {
     .bind('frame-alerts', JSON.stringify(alerted), now + 365 * 864e5).run();
 }
 
+// ------------------------------------------------------------------ pushed alerts
+// Polling Home Assistant can't be both light and quick, so for the urgent things (doorbell, smoke
+// and CO, leaks) a Home Assistant automation calls POST /api/alert the moment one changes. That
+// bumps a counter and clears the shared snapshot; frames check the counter every 2 s (D1 only,
+// nothing asked of Home Assistant) and refresh at once when it moves, so their usual alert logic
+// sees the change within a few seconds. The 10 s polling stays as the fallback.
+const ALERT_TYPES = ['doorbell', 'smoke', 'leak', 'test'];
+async function pushAlert(req, env, url) {
+  const given = url.searchParams.get('t') || ((req.headers.get('authorization') || '').replace(/^Bearer\s+/i, ''));
+  if (!env.ALERT_TOKEN || !given || !sameKey(given, env.ALERT_TOKEN)) return bad('locked', 401);
+  const b = await body(req), type = ALERT_TYPES.indexOf(b.type) > -1 ? b.type : 'test';
+  const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('alert-seq').first();
+  const seq = (row ? JSON.parse(row.value).seq : 0) + 1;
+  await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+    .bind('alert-seq', JSON.stringify({ seq, type, at: Date.now() }), Date.now() + 365 * DAY_MS).run();
+  await forgetSnapshot();
+  await caches.default.delete(new Request('https://cache.homehq.internal/ha-fail')).catch(() => {});
+  return json({ ok: true, seq });
+}
+async function alertSeq(env) {
+  const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('alert-seq').first();
+  return row ? JSON.parse(row.value) : { seq: 0 };
+}
+
 // ------------------------------------------------------------------ sticky notes
 // Short notes for the household, written on a frame or the phone page and shown on every frame
 // until cleared or expired. A note for one person also goes to their phone (people[].notify).
@@ -1030,6 +1054,7 @@ async function api(req, env, url) {
     await env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('frame:' + r[1]).run();
     return json({ ok: true });
   }
+  if (p === '/alerts' && m === 'GET') return json(await alertSeq(env));
   if (p === '/notes' && m === 'POST') return putNote(env, await body(req));
   if ((r = /^\/notes\/([a-z0-9]{6,40})$/.exec(p)) && m === 'DELETE') return clearNote(env, r[1], false);
   if ((r = /^\/notes\/([a-z0-9]{6,40})\/restore$/.exec(p)) && m === 'POST') return clearNote(env, r[1], true);
@@ -1087,6 +1112,8 @@ export default {
     // A share that arrived before the phone's service worker was running: the photos can't be
     // kept here (the upload needs the key), so open the upload page to pick them again.
     if (url.pathname === '/share' && req.method === 'POST') return Response.redirect(url.origin + '/upload?shared=0', 303);
+    // Home Assistant pushes urgent alerts here with its own token (ALERT_TOKEN), never the dashboard key.
+    if (url.pathname === '/api/alert' && req.method === 'POST') return pushAlert(req, env, url);
     if (url.pathname.indexOf('/api/') !== 0) return env.ASSETS.fetch(req);
     if (!sameKey(cookieKey(req) || req.headers.get('x-hq-key'), env.DASHBOARD_KEY)) return bad('locked', 401);
     try {

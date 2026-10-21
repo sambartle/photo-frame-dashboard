@@ -371,8 +371,16 @@ active, and unavailable ones stay hidden until they're back. To tidy the list, a
 `"players": { "exclude": ["media_player.x"], "names": { "media_player.y": "Kitchen" } }` to `home`.
 Controls appear only where the player supports them.
 
-`alerts` turns Home Assistant state into full-screen alerts on the frame. The frame polls every 10
-seconds, so an alert can take up to 10 s to appear:
+`alerts` turns Home Assistant state into full-screen alerts on the frame. The frames poll Home
+Assistant through the Worker every 10 seconds (every 60 on the photo screen and at night), and the
+Worker shares one read for 8 s, so without help an alert can take a while. **Pushed alerts** make it
+a couple of seconds: put a random `ALERT_TOKEN` in `secrets.json` (`openssl rand -hex 16`), run
+`npm run secrets`, then `npm run ha-alerts -- --with-token` prints a `secrets.yaml` line, a
+`rest_command` and an automation for your doorbell, smoke and leak entities to paste into Home
+Assistant. It calls `POST /api/alert` the moment one changes; frames check for that every 2 s
+(without asking Home Assistant anything) and refresh straight away. The token can only do that,
+not read the dashboard. Polling stays as the fallback.
+
 
 - `doorbell`: when the entity changes (a binary sensor or an `event.` entity), show the camera with
   hold-to-unlock.
