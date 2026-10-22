@@ -89,7 +89,7 @@
       if (!h.online) return;
       var prev = D.sensors || {};
       D.rooms = h.rooms; D.devices = merge(D.devices, h.devices);
-      D.climate = h.climate; D.media = h.media; D.cameras = h.cameras; D.scenes = h.scenes;
+      D.climate = h.climate; D.cameras = h.cameras; D.scenes = h.scenes;
       D.alertConfig = h.alertConfig;
       D.energy = h.energy || null;
       D.checks = h.checks || null;
@@ -198,16 +198,25 @@
     }, 5000);
     window.addEventListener('online', function () { Object.keys(PERIOD).forEach(refresh); });
     // Pushed alerts: Home Assistant bumps a counter on the Worker the moment the doorbell, a smoke
-    // alarm or a leak sensor changes. Checked every 2 s in every mode (the Home poll slows to 60 s
-    // on the photo screen and at night); when it moves, refresh Home now and the alerts fire.
-    var alertSeen = null, alertBusy = false;
-    setInterval(function () {
-      if (locked || !D.hasHome || alertBusy) return;
-      alertBusy = true;
-      request('GET', '/alerts').then(function (a) {
-        if (alertSeen !== null && a.seq !== alertSeen) refresh('home');
-        alertSeen = a.seq;
-      }, function () {}).then(function () { alertBusy = false; });
-    }, 2000);
+    // alarm or a leak sensor changes. A long poll waits on it in every mode (the Home poll slows to
+    // 60 s on the photo screen and at night): the Worker answers when it moves, or after ~25 s
+    // unchanged, and the next one starts straight away. When it moves, refresh Home now and the
+    // alerts fire. A request every ~25 s instead of every 2 s keeps within the free plan.
+    var alertSeen = null;
+    function alertPoll() {
+      if (locked || !D.hasHome) { setTimeout(alertPoll, 5000); return; }
+      // A connection that hangs (Wi-Fi drops mid-request) is given up after 40 s.
+      var ctl = window.AbortController ? new AbortController() : null;
+      var stop = ctl && setTimeout(function () { ctl.abort(); }, 40e3);
+      fetch('/api/alerts' + (alertSeen === null ? '' : '?since=' + alertSeen), { credentials: 'same-origin', signal: ctl && ctl.signal })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function (a) {
+          clearTimeout(stop);
+          if (alertSeen !== null && a.seq !== alertSeen) refresh('home');
+          alertSeen = a.seq;
+          alertPoll();
+        }, function () { clearTimeout(stop); setTimeout(alertPoll, 5000); });
+    }
+    alertPoll();
   });
 })();

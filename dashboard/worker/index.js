@@ -205,9 +205,11 @@ async function checkFrames(env) {
 // ------------------------------------------------------------------ pushed alerts
 // Polling Home Assistant can't be both light and quick, so for the urgent things (doorbell, smoke
 // and CO, leaks) a Home Assistant automation calls POST /api/alert the moment one changes. That
-// bumps a counter and clears the shared snapshot; frames check the counter every 2 s (D1 only,
-// nothing asked of Home Assistant) and refresh at once when it moves, so their usual alert logic
-// sees the change within a few seconds. The 10 s polling stays as the fallback.
+// bumps a counter and clears the shared snapshot. Frames long-poll the counter (alertWait: the
+// request waits here until it moves, D1 only, nothing asked of Home Assistant) and refresh at once
+// when it does, so their usual alert logic sees the change within a couple of seconds. One request
+// every ~25 s per frame instead of one every 2 s keeps two frames well inside the free plan's
+// 100,000 requests a day. The 10 s polling stays as the fallback.
 const ALERT_TYPES = ['doorbell', 'smoke', 'leak', 'test'];
 async function pushAlert(req, env, url) {
   const given = url.searchParams.get('t') || ((req.headers.get('authorization') || '').replace(/^Bearer\s+/i, ''));
@@ -224,6 +226,18 @@ async function pushAlert(req, env, url) {
 async function alertSeq(env) {
   const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('alert-seq').first();
   return row ? JSON.parse(row.value) : { seq: 0 };
+}
+// GET /api/alerts?since=<seq>: answers as soon as the counter differs from since (checked every
+// second), or after ALERT_WAIT_MS with it unchanged. Waiting costs no CPU time. Without since,
+// answers at once.
+const ALERT_WAIT_MS = 25e3;
+async function alertWait(env, since) {
+  const until = Date.now() + ALERT_WAIT_MS;
+  for (;;) {
+    const a = await alertSeq(env);
+    if (since == null || a.seq !== since || Date.now() >= until) return a;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
 }
 
 // ------------------------------------------------------------------ sticky notes
@@ -659,7 +673,7 @@ function forgetSnapshot() { return caches.default.delete(new Request('https://ca
 function coreIds() {
   const H = CFG.home, al = CFG.alerts, E = H.energy || {}, ids = new Set(['zone.home']);
   CFG.devices.forEach((d) => ids.add(d.entity));
-  [H.climate, H.media, al.doorbell && al.doorbell.entity, al.doorbell && al.doorbell.lock, al.leak && al.leak.valve, E.power]
+  [H.climate, al.doorbell && al.doorbell.entity, al.doorbell && al.doorbell.lock, al.leak && al.leak.valve, E.power]
     .forEach((id) => { if (id) ids.add(id); });
   [].concat((al.leak && al.leak.entities) || [], (al.smoke && al.smoke.entities) || [], E.cost || [], E.usage || []).forEach((id) => ids.add(id));
   CFG.people.forEach((p) => { if (p.ha) ids.add(p.ha); });
@@ -746,8 +760,8 @@ async function getHome(env) {
   const by = {};
   states.forEach((s) => { by[s.entity_id] = s; });
   const H = CFG.home, al = CFG.alerts;
-  const c = H.climate && by[H.climate], m = H.media && by[H.media];
-  const ca = c ? c.attributes : {}, ma = m ? m.attributes : {};
+  const c = H.climate && by[H.climate];
+  const ca = c ? c.attributes : {};
   const devices = CFG.devices.map((d) => deviceView(d, by[d.entity]));
   const garage = devices.find((d) => d.type === 'garage');
   const doorbell = al.doorbell && by[al.doorbell.entity];
@@ -758,11 +772,6 @@ async function getHome(env) {
       current: ca.current_temperature, set: ca.temperature != null ? ca.temperature : ca.target_temp_low,
       mode: c.state === 'heat_cool' ? 'auto' : c.state, modes: ca.hvac_modes || [],
       humidity: ca.current_humidity, step: ca.target_temp_step || 0.5, min: ca.min_temp || 7, max: ca.max_temp || 35,
-    } : null,
-    media: m ? {
-      room: (ma.friendly_name || '').replace(/\s*(speaker|media player)$/i, '') || 'Speaker',
-      title: ma.media_title || (m.state === 'off' || m.state === 'idle' ? 'Nothing playing' : ''), artist: ma.media_artist || ma.app_name || '',
-      playing: m.state === 'playing', art: ma.entity_picture ? '/api/ha/media?v=' + encodeURIComponent(ma.entity_picture.slice(-16)) : null,
     } : null,
     presence: CFG.people.filter((p) => p.ha).map((p) => {
       const s = by[p.ha];
@@ -978,7 +987,6 @@ async function homeActionRun(env, what, b) {
     if (b.set != null) await haService(env, 'climate', 'set_temperature', { entity_id: H.climate, temperature: +b.set });
     return json({ ok: true });
   }
-  if (what === 'media' && H.media) { await haService(env, 'media_player', 'media_play_pause', { entity_id: H.media }); return json({ ok: true }); }
   if (what === 'scene' && CFG.scenes.some((s) => s.id === b.id)) { await haService(env, 'scene', 'turn_on', { entity_id: b.id }); return json({ ok: true }); }
   if (what === 'water-off' && CFG.alerts.leak && CFG.alerts.leak.valve) {
     const v = CFG.alerts.leak.valve, domain = v.split('.')[0];
@@ -996,8 +1004,8 @@ async function haImage(env, which, url) {
     if (!ok) return bad('unknown camera', 404);
     path = '/api/camera_proxy/' + id;
   } else {
-    const id = which === 'art' ? url.searchParams.get('id') : CFG.home.media;
-    if (!id || (which === 'art' && !mediaAllowed(CFG.home, id))) return bad('no media player', 404);
+    const id = url.searchParams.get('id');
+    if (!id || !mediaAllowed(CFG.home, id)) return bad('no media player', 404);
     const s = await ha(env, '/api/states/' + id);
     const pic = s.ok && (await s.json()).attributes.entity_picture;
     if (!pic) return new Response(null, { status: 404 });
@@ -1054,7 +1062,10 @@ async function api(req, env, url) {
     await env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('frame:' + r[1]).run();
     return json({ ok: true });
   }
-  if (p === '/alerts' && m === 'GET') return json(await alertSeq(env));
+  if (p === '/alerts' && m === 'GET') {
+    const since = url.searchParams.get('since');
+    return json(await alertWait(env, since == null || since === '' ? null : +since));
+  }
   if (p === '/notes' && m === 'POST') return putNote(env, await body(req));
   if ((r = /^\/notes\/([a-z0-9]{6,40})$/.exec(p)) && m === 'DELETE') return clearNote(env, r[1], false);
   if ((r = /^\/notes\/([a-z0-9]{6,40})\/restore$/.exec(p)) && m === 'POST') return clearNote(env, r[1], true);
@@ -1083,7 +1094,7 @@ async function api(req, env, url) {
     if ((r = /^\/home\/device\/([\w.]+)$/.exec(p)) && m === 'POST') return controlDevice(env, r[1], await body(req));
     if ((r = /^\/home\/media\/(media_player\.\w+)$/.exec(p)) && m === 'POST') return mediaControl(env, r[1], await body(req));
     if ((r = /^\/home\/([\w-]+)$/.exec(p)) && m === 'POST') return homeAction(env, r[1], await body(req));
-    if (p === '/ha/camera' || p === '/ha/media' || p === '/ha/art') return haImage(env, p.slice(4), url);
+    if (p === '/ha/camera' || p === '/ha/art') return haImage(env, p.slice(4), url);
   }
   return bad('not found', 404);
 }

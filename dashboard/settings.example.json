@@ -63,7 +63,6 @@
       }
     ],
     "climate": "climate.main_floor",
-    "media": "media_player.kitchen",
     "cameras": [
       { "entity": "camera.front_porch", "name": "Front Porch" },
       { "entity": "camera.driveway", "name": "Driveway" }

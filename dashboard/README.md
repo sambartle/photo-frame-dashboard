@@ -6,15 +6,17 @@ behind it:
 
 | On screen | Comes from |
 | --- | --- |
-| Calendar, Today lanes, "Next up" | Google Calendar secret ICS links (read-only), plus events added on the frame |
+| Calendar, Today lanes, "Next up" | Google Calendar secret ICS links, plus events added on the frame (also written to Google with a service account, optional) |
+| Leave-by times | `Travel:` in the event, or a live drive time from the Google Routes API (optional) |
 | Weather | [Open-Meteo](https://open-meteo.com) for your latitude/longitude (no API key) |
 | Weather warnings | [Met Office](https://weather.metoffice.gov.uk/guides/rss) regional feed, kept to your areas (UK only, no key) |
 | Bin day | Your council's collection rotation, written into `settings.json` |
-| Shopping list | Cloudflare D1, shared by every screen and phone that opens the dashboard |
+| Shopping list, notes | Cloudflare D1, shared by every screen and phone that opens the dashboard |
 | Photos (slideshow, home tile, ambient mode) | Uploaded from a phone at `/upload`; stored in Cloudflare R2 |
-| Home tab, presence, doorbell/leak/smoke/garage alerts | Home Assistant REST API (optional) |
+| Home and Media tabs, presence, energy, doorbell/leak/smoke/garage alerts, screen off when away | Home Assistant REST API (optional) |
 
-The kiosk app in [`kiosk/`](kiosk) shows it full screen on the frame.
+The kiosk app in [`kiosk/`](kiosk) shows it full screen on the frame. [DEVLOG.md](DEVLOG.md) has the
+technical history: architecture, design decisions, version by version, and the gotchas.
 
 ## One-time setup
 
@@ -104,6 +106,116 @@ npx wrangler login
 After editing `settings.json`, run `npm run deploy` again. Lists, ticks and photos live in D1 and R2
 and aren't touched by a deploy.
 
+## Using it
+
+The frame is a touch screen laid out for 1280×800. The left rail switches tabs: **Today**,
+**Calendar**, **Shopping**, **Photos**, **Home** and **Media** (the last two only with Home
+Assistant), plus **Note**. With a keyboard, keys **1**–**6** pick the tabs, **A** and **N** show
+ambient and night mode, **D** opens the display controls and **Esc** closes things.
+
+**Screens by themselves.** After a minute untouched the frame goes back to Today; after two it
+becomes the photo screen (ambient), and from 10 PM to 6 AM a dim night clock. A tap wakes it.
+With Home Assistant and `display.awayOffMinutes`, the screen goes off while everyone is out (see
+[Home Assistant](#home-assistant)).
+
+### Today
+
+- **Next up** is the next event. With a leave-by time (see [Calendars](#calendars)) it counts down
+  "Leave for … min to leave" in the last hour, turns green with **Leave now** (and a chime), then
+  "Running late" while anyone on the event is still home. Tap the event for the details, including
+  where the drive time came from.
+- **Weather** shows today and tomorrow; a Met Office warning for your areas replaces the forecast
+  line until it ends. Tap it for the details.
+- **Bins** shows the next collection. From 4 PM the day before, the card turns dark and asks for the
+  bins to go out, with a banner at 6 PM and 8:30 PM, until someone taps **They're out**.
+- **Home card** (Home Assistant): the energy line (kWh so far today, or the current draw when it's
+  high; tap for the Energy panel) and the **all clear** line (the first thing that needs a look,
+  such as a door unlocked or a sensor battery low; tap for the list).
+- **Notes** float bottom left (see below). Who's home is top right, under the Home HQ wordmark.
+
+### Calendar
+
+**Today**, **3 Day**, **Week** and **Month** views; the day grids cover the whole 24 hours and
+open at 6 AM. Tap an event for its
+details. **+** adds an event: pick who it's for (a person or **Everyone**), type a title, then tap
+the date or time chip to pick any date and start time, and choose how long it lasts. It appears at once, and goes
+to Google Calendar too when the service account is set up. Events added on the frame show
+**Remove** in their details, which removes them from Google as well; the toast offers **Undo**.
+Events from Google are changed in the Google Calendar app.
+
+### Shopping
+
+Tap a **Usual** to add it, or type any item (known items go to their aisle, others under "Other").
+The store buttons filter the list. Tap an item to tick it off: it moves to **Got it** at the bottom,
+where it can be put back, and **Clear** empties the ticked ones (with Undo). Phones see the same list within 30 s.
+
+### Photos
+
+The Photos tab is a slideshow of everything uploaded, with "On this day" photos from earlier years.
+The heart marks a favourite, which comes up more often. Adding and deleting photos is done on a
+phone; see [Adding photos](#adding-photos).
+
+### Notes
+
+The **Note** button in the frame's left menu, or **Notes** on the phone page, pins a short
+note (140 characters) on every frame: from someone, for everyone or one person, kept until someone
+taps **Done** or until tonight, tomorrow evening or a date. On Today the newest three float
+bottom-left, tinted in the writer's colour; other tabs show a "2 notes" pill; the photo screen shows
+the newest; night mode and screen-off hide them. A note for one person also goes to their phone when
+`settings.json` gives that person a `"notify": "notify.mobile_app_…"`. Frames chime when a new one
+arrives (quiet at night). Only the frame a note was written on offers **Edit**.
+
+### Media
+
+One card per media player Home Assistant knows, playing first: play/pause, previous, next, volume
+and mute, as each player supports. A player with nothing loaded can't be started from here (start
+it from its own app first); its buttons are greyed out.
+
+### The phone page
+
+Phones open the same address and get a phone page with **Shopping**, **Notes** and **Photos**
+(upload and delete), and a link to the wall view. It warns when a frame has gone quiet. On Android,
+install it as an app to share photos straight from the gallery (see [Adding photos](#adding-photos)).
+
+### Display controls
+
+Press and hold the clock in the left rail (or press **D**) to open them. They show:
+
+- **Status:** calendar events and photos loaded, weather, and Home Assistant ("HA connected", or
+  its error), with the dashboard version underneath.
+- **Modes:** preview ambient, night and screen-off; **Refresh data** reloads everything.
+- **Test alerts:** a dropdown that shows each alert without touching the house: doorbell, water
+  leak, smoke, garage open, weather warning, bins out tonight, a frame notification to the phones
+  (this one really sends), the Leave now chime and a sound check. The bins and weather tests clear
+  themselves after two minutes and save nothing.
+
+**Sound.** Frames chime for the doorbell, "Leave now" and the bins reminder, and sound a repeating
+alarm with the smoke, carbon monoxide and water leak takeovers until it's dismissed. The sounds are
+generated in the page, so there are no audio files. Chimes stay quiet from 10 PM to 6 AM, in night
+mode and while everyone is away; alarms always sound, in addition to the real alarms. **Sound on
+this frame** in the display controls mutes the chimes and sets a volume, both remembered per frame,
+on top of Android's media volume (the frame's volume buttons, where it has them). Test alerts plays
+each sound, and **Sound check** plays a tone.
+
+**Frames** in the display controls lists every wall display that has checked in (each does every
+5 minutes): its dashboard and kiosk versions, Wi-Fi signal (kiosk 1.2) and when it was last seen.
+One quiet for 15 minutes turns red there and shows a warning on the phone page. Only the kiosk
+app (1.2 or later) checks in, so a phone or laptop showing the wall view never appears in the list.
+
+**Naming a frame.** A frame is listed under its device model ("C-2") until you name it. Put the
+name in the address the kiosk starts from, after the key:
+
+```bash
+scripts/set-kiosk-url.sh 'https://<your address>/?key=<DASHBOARD_KEY>&frame=Kitchen'
+```
+
+The kiosk opens that address at every start, so the name comes back even if the frame's storage
+is cleared. A name has letters, digits and spaces, up to 40 characters; write a space as `%20`
+(`&frame=Living%20room`). Renaming updates the frame's entry at its next check-in. After a move to
+a new address a frame checks in as new (its id is stored per address); its old entry, same name and
+quiet for 15 minutes, is removed then. Any other browser or screen can be listed the same way:
+open its address once with `?frame=<name>`. Entries silent for 30 days drop off by themselves.
+
 ## Running it day to day
 
 Run every `npx wrangler` and `npm run` command from the `dashboard` folder. From anywhere else
@@ -111,13 +223,12 @@ wrangler can't find `wrangler.jsonc` and stops with "Required Worker name missin
 
 | To change… | Edit | Then | Shows up |
 | --- | --- | --- | --- |
-| The dashboard code | the files in `dashboard/` | `npm run deploy`, then reload the frame | at the next reload |
-| People, stores, shopping catalog, weather location, bins | `settings.json` | `npm run deploy`, then reload the frame | at the next reload |
-| Calendars, dashboard key, Home Assistant token | `secrets.json` | `npm run secrets` | within ~15 min, no deploy |
-| Home Assistant devices | `home` in `settings.json` | `npm run deploy` | within ~10 s of the reload |
-| Home Assistant token | in Home Assistant | `npx wrangler secret put HA_TOKEN` | immediately |
-| The dashboard key | — | `npx wrangler secret put DASHBOARD_KEY`, then re-key every device | immediately |
-| Shopping list, photos | on a screen or phone | nothing | within 30 s on other screens |
+| The dashboard code | the files in `dashboard/` | `npm run deploy` | frames reload themselves within ~6 min |
+| People, stores, shopping catalog, weather location, bins, Home Assistant entities | `settings.json` | `npm run deploy` | frames reload themselves within ~6 min |
+| Calendars, Google keys, alert token | `secrets.json` | `npm run secrets` | calendars within ~15 min, the rest at once; no deploy |
+| Home Assistant token | a new one in Home Assistant, into `secrets.json` | `npm run secrets` | immediately |
+| The dashboard key | `secrets.json` | `npm run secrets`, then re-key every device | immediately |
+| Shopping list, notes, photos | on a screen or phone | nothing | within 30 s on other screens |
 
 ### Update the dashboard
 
@@ -125,14 +236,20 @@ wrangler can't find `wrangler.jsonc` and stops with "Required Worker name missin
 npm run deploy                 # builds and uploads; takes about 20 s
 ```
 
-The frame keeps running the copy it already loaded. To pick up the new one, open the kiosk menu (hold
-two fingers still for 1.5 s) and tap **Reload dashboard**, or power-cycle the frame. Phones get it
-the next time the page is opened.
+Frames check for a new version every 5 minutes and reload themselves once nobody has touched the
+screen for a minute; the version under **Status** in the display controls shows which one is
+running. To pick it up at once, open the kiosk menu (hold two fingers still for 1.5 s) and tap
+**Reload dashboard**. Phones get it the next time the page is opened.
 
-If an update adds a file in `migrations/`, create the new tables before deploying:
+The version number is `version` in `package.json`; bump it with each release so the frames show
+which one they run, and note the change in [DEVLOG.md](DEVLOG.md).
+
+If an update adds a file in `migrations/`, create the new tables **before** deploying, and check
+they're there, or the new code fails until they are:
 
 ```bash
 npm run db:migrate
+npx wrangler d1 migrations list home-hq --remote   # should say no migrations to apply
 ```
 
 To undo a bad deploy:
@@ -254,10 +371,11 @@ To set it up, once:
 - **A frame:** `scripts/set-kiosk-url.sh 'https://<your dashboard>/?key=<DASHBOARD_KEY>'` from the
   repository root, with the frame on ADB.
 - **Change the key**, for example if a link with it was shared:
-  `npx wrangler secret put DASHBOARD_KEY` with a new `openssl rand -hex 24`. Every device then shows
-  "Not connected" until it has opened the address with the new key once.
+  put a new `openssl rand -hex 24` in `secrets.json` as `DASHBOARD_KEY` and run `npm run secrets`.
+  Every device then shows "Not connected" until it has opened the address with the new key once;
+  re-point each frame with `scripts/set-kiosk-url.sh` (keep its `&frame=` name).
 
-### Photos
+### Adding photos
 
 On a phone, open `/upload` (or **Photos** on the phone page). Pick **Added by**, an optional place,
 and the photos. They're resized on the phone, and the location and other hidden metadata are
@@ -281,20 +399,48 @@ again because the cookie belongs to the old address. To move without visiting ea
    `npx wrangler deploy -c tools/moved/wrangler.jsonc`. The old address now redirects every page to
    the new one, adding the key for anyone who already had it (the old cookie or `?key=`), and pages
    left open reload into it within a few minutes.
-3. Point each frame at the new address with `scripts/set-kiosk-url.sh`: the kiosk keeps starting
-   from the address it was given, so until then it goes through the redirect. Reinstall the phone
-   app from the new address (the share menu entry belongs to the old one).
-4. When nothing uses the old address any more, delete its Worker in the Cloudflare dashboard.
+3. Point each frame at the new address with `scripts/set-kiosk-url.sh` (keep its `&frame=` name):
+   the kiosk keeps starting from the address it was given, so until then it goes through the
+   redirect. Reinstall the phone app from the new address (the share menu entry belongs to the
+   old one).
+4. With pushed alerts, change the address in Home Assistant's `secrets.yaml` line
+   (`npm run ha-alerts -- --with-token` prints the new one) and restart Home Assistant. Until
+   then its pushes go to the old address, and alerts arrive only by polling.
+5. When nothing uses the old address any more, delete its Worker in the Cloudflare dashboard.
+
+The Google service account and Maps key don't depend on the address.
 
 ### Backups
 
-Shopping and frame-added events live in D1 (plus old chore ticks in `chore_log`, kept but no longer used):
+What isn't in git, and where its copy should live:
+
+| What | Where it lives | Back it up by |
+| --- | --- | --- |
+| `secrets.json` | your machine only (Cloudflare never shows secrets again) | a copy in a password manager, after every change |
+| `settings.json` | your machine only (gitignored); bundled into the deployed Worker | a copy somewhere safe (it holds entity ids and the bin rotation, nothing secret) |
+| Shopping list, notes, frame-added events, photo list, bins "they're out" | D1 | `npx wrangler d1 export` (below) |
+| Photos | R2 | nothing: they're copies of ones on your phone |
+| Frame setup (private notes, build and deploy scripts) | `frames/` at the repository root, gitignored | a copy alongside `settings.json` |
 
 ```bash
-npx wrangler d1 export home-hq --remote --output home-hq-backup.sql
+npx wrangler d1 export home-hq --remote --output home-hq-$(date +%F).sql
 ```
 
-The photos are copies of ones on your phone, so they don't need a separate backup.
+D1 also keeps point-in-time history by itself (Time Travel: 7 days on the free plan, 30 on paid), which is the quickest way
+back from a mistake:
+
+```bash
+npx wrangler d1 time-travel info home-hq                       # the bookmark for now
+npx wrangler d1 time-travel restore home-hq --timestamp=2026-10-20T18:00:00Z
+```
+
+A restore replaces the whole database, so export first. The `chore_log` table holds chore ticks
+from before chores were removed; nothing reads it.
+
+To rebuild from nothing: create D1 and R2 as in [One-time setup](#one-time-setup), import the export
+with `npx wrangler d1 execute home-hq --remote --file home-hq-<date>.sql` instead of
+`npm run db:migrate`, put back `settings.json` and `secrets.json`, then `npm run secrets` and
+`npm run deploy`. Photos would need uploading again.
 
 ### When something looks wrong
 
@@ -346,11 +492,11 @@ entities listed in `settings.json` can be read or controlled through the dashboa
    ```
 
 5. **Check it.** The Home tab appears on the frame. **Status** in the display controls (hold the clock)
-   says "Home Assistant connected", or shows its error: a wrong address, a token rejected
+   says "HA connected", or "HA offline" with its error: a wrong address, a token rejected
    (`HTTP 401`), or the address unreachable from the internet.
 
 To add or remove devices later, edit `home` and deploy again. If the token is lost or leaked, delete
-it under that user's **Profile → Security** and put a new one in with `npx wrangler secret put HA_TOKEN`.
+it under that user's **Profile → Security** and put the new one in `secrets.json` and run `npm run secrets`.
 To turn Home Assistant off, remove the `home` section and deploy; the Home tab disappears.
 
 ### What each entity becomes
@@ -377,8 +523,9 @@ Worker shares one read for 8 s, so without help an alert can take a while. **Pus
 a couple of seconds: put a random `ALERT_TOKEN` in `secrets.json` (`openssl rand -hex 16`), run
 `npm run secrets`, then `npm run ha-alerts -- --with-token` prints a `secrets.yaml` line, a
 `rest_command` and an automation for your doorbell, smoke and leak entities to paste into Home
-Assistant. It calls `POST /api/alert` the moment one changes; frames check for that every 2 s
-(without asking Home Assistant anything) and refresh straight away. The token can only do that,
+Assistant. It calls `POST /api/alert` the moment one changes. Each frame keeps one request waiting
+at the Worker for that (up to 25 s, then it asks again; Home Assistant isn't involved), so it
+hears within about a second and refreshes straight away. The token can only do that,
 not read the dashboard. Polling stays as the fallback.
 
 
@@ -414,45 +561,6 @@ Assistant can place has been away that long, and back on when someone comes home
 alert fires. People whose state is unknown are left out. With kiosk 1.2 the backlight goes down
 too; Android keeps running so the frame can wake by itself.
 
-Press and hold the clock in the sidebar, or press **D**, for display controls. From there you can
-preview ambient, night and screen-off modes, show each alert without touching the house, refresh
-data, and check what's connected.
-
-**Sound.** Frames chime for the doorbell, "Leave now" and the bins reminder, and sound a repeating
-alarm with the smoke, carbon monoxide and water leak takeovers until it's dismissed. The sounds are
-generated in the page, so there are no audio files. Chimes stay quiet from 10 PM to 6 AM, in night
-mode and while everyone is away; alarms always sound, in addition to the real alarms. **Sound on
-this frame** in the display controls mutes the chimes and sets a volume, both remembered per frame,
-on top of Android's media volume (the frame's volume buttons, where it has them). Test alerts plays
-each sound, and **Sound check** plays a tone.
-
-**Notes.** The **Note** button in the frame's left menu, or **Notes** on the phone page, pins a short
-note (140 characters) on every frame: from someone, for everyone or one person, kept until someone
-taps **Done** or until tonight, tomorrow evening or a date. On Today the newest three float
-bottom-left, tinted in the writer's colour; other tabs show a "2 notes" pill; the photo screen shows
-the newest; night mode and screen-off hide them. A note for one person also goes to their phone when
-`settings.json` gives that person a `"notify": "notify.mobile_app_…"`. Frames chime when a new one
-arrives (quiet at night). Only the frame a note was written on offers **Edit**.
-
-**Frames** in the display controls lists every wall display that has checked in (each does every
-5 minutes): its dashboard and kiosk versions, Wi-Fi signal (kiosk 1.2) and when it was last seen.
-One quiet for 15 minutes turns red there and shows a warning on the phone page. Only the kiosk
-app (1.2 or later) checks in, so a phone or laptop showing the wall view never appears in the list.
-
-**Naming a frame.** A frame is listed under its device model ("C-2") until you name it. Put the
-name in the address the kiosk starts from, after the key:
-
-```bash
-scripts/set-kiosk-url.sh 'https://<your address>/?key=<DASHBOARD_KEY>&frame=Kitchen'
-```
-
-The kiosk opens that address at every start, so the name comes back even if the frame's storage
-is cleared. A name has letters, digits and spaces, up to 40 characters; write a space as `%20`
-(`&frame=Living%20room`). Renaming updates the frame's entry at its next check-in. After a move to
-a new address a frame checks in as new (its id is stored per address); its old entry, same name and
-quiet for 15 minutes, is removed then. Any other browser or screen can be listed the same way:
-open its address once with `?frame=<name>`. Entries silent for 30 days drop off by themselves.
-
 **Phone notifications when a frame goes quiet** (needs Home Assistant): list Home Assistant notify
 services in `settings.json`, for example `"frames": { "notify": ["notify.mobile_app_pixel"] }`
 (Home Assistant: **Developer tools → Actions**, search `notify.mobile_app`). Every 5 minutes the
@@ -462,23 +570,23 @@ goes through the same `HA_TOKEN` as everything else; a non-admin user may call n
 house's internet is down, the Worker can't reach Home Assistant either, so that outage goes
 unreported. **Test alerts → Frame notification** in the display controls sends a test.
 
-After a deploy, frames reload themselves within about six minutes, waiting until nobody has
-touched the screen for a minute.
-
 ## How it fits together
 
 - `worker/index.js` contains the API, auth, D1/R2 access and the Home Assistant mapping.
   `worker/ics.js` expands recurring events with [ical.js](https://github.com/kewisch/ical.js), and
   handles exceptions, moved occurrences, cancellations and time zones.
 - `js/sync.js` loads data and keeps it fresh: lists every 30 s, calendar every 5 min, weather every
-  15 min, Home Assistant every 10 s (60 s in ambient and night mode). It saves the last copy on the
+  15 min, Home Assistant every 10 s (60 s in ambient and night mode), pushed alerts by long poll. It
+  saves the last copy on the
   device, so the frame starts instantly and keeps showing something during an outage. Changes on
   screen are optimistic and saved in the background. If a save fails, the frame says so and reloads
   the true state.
 - Parsed calendars and the forecast are cached in D1 (10 and 15 minutes), so the feeds aren't
   fetched on every poll. If a feed fails, the last good copy is shown.
-- Calendars are read-only. Events added with **+** on the frame are stored in D1 and only appear on
-  the dashboard, not in Google Calendar.
+- Calendars are read through their iCal links. Events added with **+** on the frame are stored in
+  D1, and written to Google Calendar too when a service account is set up.
+- The Worker reads Home Assistant one entity at a time and shares the result between all screens
+  for 8 s, so frames add little load to Home Assistant. Details in [DEVLOG.md](DEVLOG.md).
 
 ## Local development
 
@@ -495,8 +603,17 @@ run `npm run dev`. Vite proxies `/api` to it, and the cookie works on both ports
 
 ## Costs and limits
 
-Everything fits Cloudflare's free tier for one household: about 15k requests a day per screen at
-these poll rates (the limit is 100k), D1 and R2 storage well under the free quotas. A
-calendar with years of recurring events can exceed the free plan's 10 ms CPU limit when it's
+Cloudflare's free plan allows 100,000 Worker requests a day, and every request counts, pages and
+images included (`run_worker_first`). A frame with Home Assistant makes about 14,000 a day: Home
+Assistant every 10 s in the day, lists every 30 s, and one pushed-alert request every 25 s.
+Without Home Assistant it's about 3,500. A phone adds a few hundred while the page is open. So
+several frames fit in the free plan; past the limit, requests fail until midnight UTC. Usage is
+under **Workers & Pages → home-hq → Metrics** in the Cloudflare dashboard. D1 and R2 use stay well
+inside their free allowances.
+
+A calendar with years of recurring events can exceed the free plan's 10 ms CPU limit when it's
 re-parsed (once every 10 minutes at most). If you see `exceeded CPU` errors in
-`npx wrangler tail`, use fewer or smaller calendars, or the $5/month Workers Paid plan.
+`npx wrangler tail`, use fewer or smaller calendars, or Workers Paid.
+
+Google: drive times are capped at 300 Routes API calls a day (see [Calendars](#calendars)); the
+Calendar API has no charge.
