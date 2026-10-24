@@ -41,7 +41,7 @@
     $('#night').innerHTML = '<div class="nt-inner"></div>';
     amb.show = new App.Slideshow($('#ambient .amb-stage'), { layout: 'cover', captions: false, interval: 14000 });
     $('#ambient').addEventListener('click', function () { App.setMode('day'); App.go('home'); });
-    $('#night').addEventListener('click', function () { App.setMode('nightdash'); });
+    $('#night').addEventListener('click', function () { App.setMode('day'); App.go('home'); });
   });
 
   App.on('mode', function (m) {

@@ -158,7 +158,10 @@ and check before deploying code that needs them**: in 1.14 the notes migration h
 
 | Version | Commit | What changed |
 | --- | --- | --- |
-| 1.16 | — | Pushed alerts by long poll (fits the free plan); DEVLOG; README audit; dead `home.media` setting removed |
+| 1.18 | — | Per-frame timeouts (`hq-idle`: Today 60 s, Rest 120 s, Peek 20 s in the night hours); night mode controls: Dim/Bright/Sleep/Wake times and a toggle; the dim amber tint now follows the night hours (`data-night` on the stage) instead of only the tap-the-clock state; Modes is a dropdown (Ambient, Screen off), refresh is an icon button, "Idle: fast" and the Night preview removed; Screen off picked by hand stays until a tap (`App.setMode('off', true)`); Ambient from the controls and the A key just call `App.rest()` (rest now, the clock still decides); tapping the night clock goes to Today like any wake (no more 20 s `nightdash` mode); the clock picks the resting screen only when idle runs out and at the four boundaries (`App.restMode`, `App.rest`, `App.syncNightMode`) |
+| 1.17.1 | — | Night/screen-off time boxes open the picker on a tap anywhere in the box (same `showPicker()` trick as the calendar's add dialog) |
+| 1.17 | — | Night and screen-off hours per frame, set in the display controls (`hq-night` in localStorage); frames now move between photo screen and night clock by themselves at the boundaries |
+| 1.16 | 875b4ef | Pushed alerts by long poll (fits the free plan); DEVLOG; README audit; dead `home.media` setting removed |
 | 1.15 | 1b413cb | Home Assistant pushes urgent alerts (`/api/alert`, 2 s alert poll, `npm run ha-alerts`) |
 | 1.14 | 596a69a | Sticky notes on frames and phone; push to the person's phone; migration 0003 |
 | 1.13 | 41dad00 | HA load cut by >95%: per-entity reads, 8 s edge snapshot, 5 min discovery, timeouts, back-off |

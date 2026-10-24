@@ -1,7 +1,7 @@
 // Sounds, made with the Web Audio API (no audio files). Two kinds:
 //   alarms (smoke, CO, water leak): repeat until the takeover closes, always play, even muted;
 //   chimes (doorbell, leave now, bins, sound check): one-offs, quiet when this frame is muted,
-//   at night (10 PM – 6 AM, or night mode) and while everyone is away (screen off).
+//   at night (the frame's night hours, 10 PM – 6 AM unless set, or night mode) and while everyone is away (screen off).
 // Mute and volume are per frame (localStorage), set in the display controls. The kiosk lets
 // pages play sound without a tap first; in a browser the first tap unlocks it.
 (function () {
@@ -57,7 +57,7 @@
     SOUNDS[name](c, out);
   }
   function quietNow() {
-    return S.muted || App.isNight() || App.mode === 'night' || App.mode === 'nightdash' || App.mode === 'off' ||
+    return S.muted || App.isNight() || App.mode === 'night' || App.mode === 'off' ||
       (App.everyoneAway && App.everyoneAway());
   }
 

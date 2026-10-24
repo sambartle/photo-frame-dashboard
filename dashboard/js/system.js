@@ -140,8 +140,10 @@
   function demoHTML() {
     return '<div class="demo-panel">' +
       '<div class="demo-head"><div><div class="label label--light">Home HQ</div><h2 class="serif">Display controls</h2></div><button class="demo-x" data-demo-close>' + App.icon('x', 28) + '</button></div>' +
-      '<div class="demo-sec"><div class="label label--light">Modes</div><div class="demo-grid">' +
-      '<button data-mode="ambient">Ambient</button><button data-mode="night">Night</button><button data-mode="off">Screen off</button><button data-fastidle>' + (App.idle.home < 60 ? 'Idle: fast ✓' : 'Idle: fast') + '</button><button data-reload>Refresh data</button></div></div>' +
+      '<div class="demo-sec"><div class="label label--light">Modes</div><div class="demo-test">' +
+      '<select id="demoMode" aria-label="Mode to show"><option value="ambient">Ambient</option><option value="off">Screen off</option></select>' +
+      '<button data-modego>Show</button>' +
+      '<button class="demo-icon" data-reload aria-label="Refresh data">' + App.icon('refresh', 26) + '</button></div></div>' +
       (tests().length ? '<div class="demo-sec"><div class="label label--light">Test alerts (nothing is sent to the house)</div><div class="demo-test">' +
       '<select id="demoAlert" aria-label="Alert to test">' + tests().map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select>' +
       '<button data-test>Show</button></div></div>' : '') +
@@ -149,11 +151,26 @@
       '<button data-mute class="' + (App.soundSettings.muted ? '' : 'is-on') + '">' + (App.soundSettings.muted ? 'Chimes off' : 'Chimes on') + '</button>' +
       '<input type="range" min="0" max="100" step="5" value="' + Math.round(App.soundSettings.volume * 100) + '" data-volume aria-label="Volume">' +
       '<span class="demo-vol num">' + Math.round(App.soundSettings.volume * 100) + '%</span></div>' +
-      '<p class="demo-note">Doorbell, leave now and bins chimes; quiet 10 PM – 6 AM and while everyone’s away. Smoke, CO and leak alarms always sound.</p></div>' +
+      '<p class="demo-note">Doorbell, leave now and bins chimes; quiet at night and while everyone’s away. Smoke, CO and leak alarms always sound.</p></div>' +
+      '<div class="demo-sec"><div class="label label--light">Night mode</div>' +
+      '<div class="demo-night">' +
+      '<label>Dim <input type="time" data-night="from" value="' + App.night.from + '" aria-label="Dim from"></label>' +
+      '<label>Bright <input type="time" data-night="to" value="' + App.night.to + '" aria-label="Bright from"></label></div>' +
+      '<div class="demo-night">' +
+      '<label>Sleep <input type="time" data-night="offFrom" value="' + App.night.offFrom + '" aria-label="Screen off from"></label>' +
+      '<label>Wake <input type="time" data-night="offTo" value="' + App.night.offTo + '" aria-label="Screen on from"></label>' +
+      '<button data-nightoff class="' + (App.night.offOn ? 'is-on' : '') + '" aria-label="Screen off at night">' + (App.night.offOn ? 'On' : 'Off') + '</button></div></div>' +
+      '<div class="demo-sec"><div class="label label--light">Timeouts (seconds)</div>' +
+      '<div class="demo-night">' +
+      '<label>Today <input type="number" inputmode="numeric" min="5" max="3600" step="5" data-idle="home" value="' + App.idle.home + '" aria-label="Seconds before returning to Today"></label>' +
+      '<label>Rest <input type="number" inputmode="numeric" min="5" max="3600" step="5" data-idle="rest" value="' + App.idle.rest + '" aria-label="Seconds before the photo screen"></label></div>' +
+      '<div class="demo-night">' +
+      '<label>Peek <input type="number" inputmode="numeric" min="5" max="3600" step="5" data-idle="peek" value="' + App.idle.peek + '" aria-label="Seconds before the night clock"></label>' +
+      '<span class="demo-spacer"></span></div></div>' +
       '<div class="demo-sec"><div class="label label--light">Frames</div><div class="demo-frames" id="demoFrames"><p class="demo-note">Checking…</p></div></div>' +
       '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p>' +
       '<p class="demo-note">Version ' + __APP_VERSION__ + '</p></div>' +
-      '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>N</b> night · <b>1–6</b> views</p>' +
+      '<p class="demo-note">Keyboard: <b>D</b> controls · <b>A</b> ambient · <b>1–6</b> views</p>' +
       '</div>';
   }
   // [id, label]: Home Assistant alerts only when it's set up; weather and bins work without it.
@@ -201,17 +218,22 @@
     var b = e.target.closest('button');
     if (!b) { if (e.target === $('#demo')) closeDemo(); return; }
     if (b.hasAttribute('data-demo-close')) return closeDemo();
-    if (b.dataset.mode) { closeDemo(); App.setMode(b.dataset.mode); return; }
+    if (b.hasAttribute('data-modego')) {
+      closeDemo();
+      // Ambient = rest now, skipping the timeout: the clock still picks the screen (photos, dim
+      // clock or screen off) and keeps switching at Dim, Bright, Sleep and Wake. Screen off is a
+      // manual pick: as dark as the panel goes, and it stays until someone taps.
+      if ($('#demoMode').value === 'off') App.setMode('off', true); else App.rest();
+      return;
+    }
     if (b.hasAttribute('data-mute')) {
       App.setSound({ muted: !App.soundSettings.muted });
       if (!App.soundSettings.muted) App.sound('check', true);
       App.openDemo();
       return;
     }
-    if (b.hasAttribute('data-fastidle')) {
-      var fast = App.idle.home >= 60;
-      App.idle.home = fast ? 8 : 60;
-      App.idle.ambient = fast ? 15 : 120;
+    if (b.hasAttribute('data-nightoff')) {
+      App.setNight({ offOn: !App.night.offOn });
       App.openDemo();
       return;
     }
@@ -238,6 +260,14 @@
 
   App.on('ready', function () {
     $('#demo').addEventListener('click', demoClick);
+    // Time pickers: a tap anywhere on the box opens the picker, not just on its little icon.
+    $('#demo').addEventListener('click', function (e) {
+      var l = e.target.closest('.demo-night label'), i = l && l.querySelector('input');
+      if (!i) return;
+      e.preventDefault();
+      if (i.showPicker) { try { i.showPicker(); return; } catch (err) {} } // throws if one is already open
+      i.focus();
+    });
     // Volume: follows the slider; a check sound when let go, so it can be set by ear.
     $('#demo').addEventListener('input', function (e) {
       if (!e.target.hasAttribute('data-volume')) return;
@@ -245,14 +275,25 @@
       var lbl = $('#demo .demo-vol');
       if (lbl) lbl.textContent = e.target.value + '%';
     });
-    $('#demo').addEventListener('change', function (e) { if (e.target.hasAttribute('data-volume')) App.sound('check', true); });
+    $('#demo').addEventListener('change', function (e) {
+      if (e.target.hasAttribute('data-volume')) App.sound('check', true);
+      if (e.target.dataset.idle) {
+        var q = {}; q[e.target.dataset.idle] = e.target.value;
+        App.setIdle(q);
+        e.target.value = App.idle[e.target.dataset.idle]; // out-of-range entries snap back
+      }
+      if (e.target.dataset.night && e.target.value) {
+        var p = {}; p[e.target.dataset.night] = e.target.value;
+        if (!App.setNight(p)) App.toast('Pick a time', { tone: 'error', icon: 'bolt' });
+        else App.openDemo();
+      }
+    });
     App.hold($('#railClock'), 700, { done: App.openDemo });
     document.addEventListener('keydown', function (e) {
       if (e.target.tagName === 'INPUT') return;
       var k = e.key.toLowerCase();
       if (k === 'd') { $('#demo').classList.contains('is-open') ? closeDemo() : App.openDemo(); }
-      if (k === 'a') App.setMode('ambient');
-      if (k === 'n') App.setMode('night');
+      if (k === 'a') App.rest();
       if (k === 'escape') { closeDemo(); App.closeSheet(); }
       var views = ['home', 'calendar', 'shopping', 'photos', 'control', 'media'];
       if (k >= '1' && k <= '6') App.go(views[+k - 1]);

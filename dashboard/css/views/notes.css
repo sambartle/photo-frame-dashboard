@@ -2,7 +2,7 @@
 .notes { position: absolute; z-index: 30; left: 100px; bottom: 22px; pointer-events: none; }
 .notes.is-empty { display: none; }
 .notes > * { pointer-events: auto; }
-.stage[data-mode="night"] .notes, .stage[data-mode="nightdash"] .notes, .stage[data-mode="off"] .notes, .stage[data-mode="ambient"] .notes { display: none; }
+.stage[data-mode="night"] .notes, .stage[data-mode="off"] .notes, .stage[data-mode="ambient"] .notes { display: none; }
 
 .nt-stack { display: grid; width: 340px; }
 .nt {

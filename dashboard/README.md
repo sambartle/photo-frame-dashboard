@@ -110,11 +110,17 @@ and aren't touched by a deploy.
 
 The frame is a touch screen laid out for 1280×800. The left rail switches tabs: **Today**,
 **Calendar**, **Shopping**, **Photos**, **Home** and **Media** (the last two only with Home
-Assistant), plus **Note**. With a keyboard, keys **1**–**6** pick the tabs, **A** and **N** show
-ambient and night mode, **D** opens the display controls and **Esc** closes things.
+Assistant), plus **Note**. With a keyboard, keys **1**–**6** pick the tabs, **A** rests
+the frame now, **D** opens the display controls and **Esc** closes things.
 
-**Screens by themselves.** After a minute untouched the frame goes back to Today; after two it
-becomes the photo screen (ambient), and from 10 PM to 6 AM a dim night clock. A tap wakes it.
+**Screens by themselves.** After a minute untouched the frame goes back to Today. After two it
+(20 seconds in the night hours, so a look at the time doesn't keep the screen up) rests, and the clock chooses how: the photo screen by day, a dim clock between **Dim** and
+**Bright** (10 PM to 6 AM unless you change them), or the screen off between **Sleep** and **Wake**
+if you've switched that on. A tap wakes it to Today, and from then on it's just the dashboard until
+it next goes quiet. Between Dim and Bright the whole dashboard is dimmed and amber, tapped
+awake or not (alerts are never dimmed), so a tap in the night doesn't flash a bright screen. The
+same happens at the boundaries: a frame resting on photos when Dim arrives becomes the clock, and
+so on. One that someone is using carries on until it next rests.
 With Home Assistant and `display.awayOffMinutes`, the screen goes off while everyone is out (see
 [Home Assistant](#home-assistant)).
 
@@ -183,7 +189,21 @@ Press and hold the clock in the left rail (or press **D**) to open them. They sh
 
 - **Status:** calendar events and photos loaded, weather, and Home Assistant ("HA connected", or
   its error), with the dashboard version underneath.
-- **Modes:** preview ambient, night and screen-off; **Refresh data** reloads everything.
+- **Night mode:** four times kept on that frame, so each frame can differ (the bedroom from the
+  kitchen). **Dim** and **Bright** are when the photo screen turns into a dim clock and when it goes
+  back (10 PM and 6 AM until set); chimes stay quiet in between. **Sleep** and **Wake** are when an
+  untouched frame goes fully dark and comes back (1 AM and 5 AM suggested); they only apply when the
+  button beside them says **On**. A tap or any alert wakes a sleeping frame, and it goes dark again
+  after two minutes untouched. A window may cross midnight. Clearing the frame's storage resets the times.
+- **Timeouts:** three times in seconds, kept on that frame: **Today** (back to Today after this long
+  untouched, 60), **Rest** (then the photo screen, dim clock or screen off, 120) and **Peek** (the
+  Rest time instead, during the night hours, 20). Anything outside 5–3600 snaps back.
+- **Modes:** a dropdown and **Show**. **Ambient** rests the frame now instead of waiting for the
+  timeout; the clock still chooses the screen (photos, dim clock or off) and keeps switching at
+  Dim, Bright, Sleep and Wake as normal. **Screen off** turns the screen as dark as it goes and keeps
+  it that way, whatever the time, until someone taps it. A tap checks the clock and shows Today
+  dimmed or normal as the hour requires. The circular-arrow button beside it refreshes all the data
+  at once.
 - **Test alerts:** a dropdown that shows each alert without touching the house: doorbell, water
   leak, smoke, garage open, weather warning, bins out tonight, a frame notification to the phones
   (this one really sends), the Leave now chime and a sound check. The bins and weather tests clear
@@ -191,7 +211,7 @@ Press and hold the clock in the left rail (or press **D**) to open them. They sh
 
 **Sound.** Frames chime for the doorbell, "Leave now" and the bins reminder, and sound a repeating
 alarm with the smoke, carbon monoxide and water leak takeovers until it's dismissed. The sounds are
-generated in the page, so there are no audio files. Chimes stay quiet from 10 PM to 6 AM, in night
+generated in the page, so there are no audio files. Chimes stay quiet in the night hours, in night
 mode and while everyone is away; alarms always sound, in addition to the real alarms. **Sound on
 this frame** in the display controls mutes the chimes and sets a volume, both remembered per frame,
 on top of Android's media volume (the frame's volume buttons, where it has them). Test alerts plays

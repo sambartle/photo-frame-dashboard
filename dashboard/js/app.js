@@ -16,7 +16,68 @@
   App.dayStart = function (d) { var x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
   App.addDays = function (d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; };
   App.sameDay = function (a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); };
-  App.isNight = function () { var h = App.now().getHours(); return h >= 22 || h < 6; };
+  // Night and screen-off hours are per frame (display controls), kept in localStorage as "HH:MM".
+  // Night: the photo screen becomes a dim clock and chimes stay quiet (10 PM to 6 AM until set).
+  // Screen off: the backlight goes right down (off until switched on; 1 AM to 5 AM suggested).
+  // A window may cross midnight; from = to means never.
+  var NIGHT_DEFAULT = { from: '22:00', to: '06:00', offOn: false, offFrom: '01:00', offTo: '05:00' };
+  function validTime(t) { return typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t); }
+  App.night = (function () {
+    var n = Object.assign({}, NIGHT_DEFAULT);
+    try {
+      var v = JSON.parse(localStorage.getItem('hq-night')) || {};
+      ['from', 'to', 'offFrom', 'offTo'].forEach(function (k) { if (validTime(v[k])) n[k] = v[k]; });
+      n.offOn = v.offOn === true;
+    } catch (e) {}
+    return n;
+  })();
+  App.setNight = function (patch) {
+    var n = Object.assign({}, App.night, patch);
+    if (!['from', 'to', 'offFrom', 'offTo'].every(function (k) { return validTime(n[k]); })) return false;
+    App.night = n;
+    try { localStorage.setItem('hq-night', JSON.stringify(n)); } catch (e) {}
+    App.syncNightMode();
+    return true;
+  };
+  function mins(t) { return +t.slice(0, 2) * 60 + +t.slice(3); }
+  function within(from, to) {
+    var d = App.now(), m = d.getHours() * 60 + d.getMinutes(), a = mins(from), b = mins(to);
+    return a === b ? false : a < b ? m >= a && m < b : m >= a || m < b;
+  }
+  App.isNight = function () { return within(App.night.from, App.night.to); };
+  App.isScheduledOff = function () { return App.night.offOn && within(App.night.offFrom, App.night.offTo); };
+  // "10 PM", "6:30 AM" for the notes in the display controls.
+  App.nightLabel = function (t) {
+    var h = +t.slice(0, 2), m = t.slice(3);
+    return (h % 12 || 12) + (m === '00' ? '' : ':' + m) + ' ' + (h < 12 ? 'AM' : 'PM');
+  };
+  // The clock picks the resting screen at three moments only: when the idle timer runs out, at the
+  // Dim, Bright, Sleep and Wake times for a frame that's resting untouched, and nowhere else.
+  //   Sleep to Wake (if switched on) -> screen off; Dim to Bright -> the dim clock; else photos.
+  // A frame someone is using (day) isn't interrupted: it settles into the resting screen once
+  // idle. A mode picked in the display controls (manual) stays until the next tap.
+  App.scheduledOff = false;
+  App.restMode = function () { return App.isScheduledOff() ? 'off' : App.isNight() ? 'night' : 'ambient'; };
+  // The whole UI is dimmed and amber-tinted (css: data-night) for as long as it's night, whatever
+  // the mode, so a tap in the night doesn't flash a bright screen. Outside the hours it's normal.
+  App.applyNight = function () { var st = $('#stage'); if (st) st.dataset.night = App.isNight() ? '1' : '0'; };
+  App.rest = function () {
+    var m = App.restMode();
+    App.closeSheet();
+    App.go('home');
+    App.setMode(m);
+    App.scheduledOff = m === 'off';
+  };
+  App.syncNightMode = function () {
+    App.applyNight();
+    if (App.manualMode) return;
+    var m = App.mode, t = App.restMode();
+    if (!(m === 'ambient' || m === 'night' || (m === 'off' && App.scheduledOff)) || t === m) return;
+    if (t === 'off' && $('#takeover').classList.contains('is-open')) return;
+    App.closeSheet();
+    App.setMode(t);
+    App.scheduledOff = t === 'off';
+  };
 
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -286,27 +347,46 @@
   };
 
   // ------------------------------------------------------------ modes: day / ambient / night
-  App.setMode = function (m) {
+  // manual: picked from the display controls or keyboard as a preview, so the clock doesn't undo it.
+  App.manualMode = false;
+  App.setMode = function (m, manual) {
     var stage = $('#stage');
     App.mode = m;
+    App.manualMode = !!manual;
+    if (m !== 'off') App.scheduledOff = false;
     stage.dataset.mode = m;
+    App.applyNight();
     App.emit('mode', m);
   };
 
   // ------------------------------------------------------------ idle
-  App.idle = { home: 60, ambient: 120 };
+  // Timeouts (seconds since the last touch), per frame (display controls): back to Today, rest
+  // (photo screen, dim clock or screen off), and the same during the night hours ("peek"), so a
+  // look at the time in bed doesn't keep the screen up for two minutes.
+  App.idle = (function () {
+    var d = { home: 60, rest: 120, peek: 20 };
+    try {
+      var v = JSON.parse(localStorage.getItem('hq-idle')) || {};
+      Object.keys(d).forEach(function (k) { if (v[k] >= 5 && v[k] <= 3600) d[k] = Math.round(v[k]); });
+    } catch (e) {}
+    return d;
+  })();
+  App.setIdle = function (patch) {
+    var n = Object.assign({}, App.idle);
+    Object.keys(patch).forEach(function (k) {
+      var v = Math.round(+patch[k]);
+      if (k in n && v >= 5 && v <= 3600) n[k] = v;
+    });
+    Object.assign(App.idle, n);
+    try { localStorage.setItem('hq-idle', JSON.stringify(App.idle)); } catch (e) {}
+  };
   var idleSec = 0;
   function onIdleTick() {
     idleSec++;
     var blocked = $('#takeover').classList.contains('is-open');
-    if (App.mode === 'nightdash' && idleSec >= 20) { App.setMode('night'); return; }
     if (App.mode !== 'day' || blocked) return;
     if (idleSec === App.idle.home && App.current !== 'home') { App.closeSheet(); App.go('home'); }
-    if (idleSec >= App.idle.ambient) {
-      App.closeSheet();
-      App.go('home');
-      App.setMode(App.isNight() ? 'night' : 'ambient');
-    }
+    if (idleSec >= (App.isNight() ? App.idle.peek : App.idle.rest)) App.rest();
   }
   App.resetIdle = function () { idleSec = 0; };
   App.idleFor = function () { return idleSec; };
@@ -326,12 +406,14 @@
       lastMin = n.getMinutes();
       $('#railClock').innerHTML = '<b>' + App.fmt.time(n, false) + '</b><span>' + App.fmt.ampm(n) + '</span>';
       App.emit('minute', n);
+      App.syncNightMode();
     }
     onIdleTick();
   }
 
   // ------------------------------------------------------------ boot
   App.start = function () {
+    App.applyNight();
     fit();
     window.addEventListener('resize', fit);
     // Switch tabs the instant a finger lands (pointerdown), not on release. Keyboard "clicks"
