@@ -49,6 +49,15 @@
   });
   App.on('ready', function () {
     $('#screenoff').addEventListener('click', function () { App.setMode('day'); App.go('home'); });
+    // Kiosk 1.3 can put the screen fully to sleep. A touch (or the power button) wakes it, and
+    // Android uses up that touch, so the kiosk tells the page the screen came on.
+    window.HomeHQScreenOn = function () {
+      if (App.mode === 'off') { App.setMode('day'); App.go('home'); }
+    };
+    // A page that loads while the screen is asleep (a retry, say) joins it: "off" for the clock to
+    // wake at the right time, instead of believing it's day with nobody looking.
+    var info = App.kiosk();
+    if (info && info.screenOn === false) { App.setMode('off'); App.scheduledOff = true; }
   });
 
   // ------------------------------------------------------------ frame health
@@ -99,7 +108,8 @@
   }
   App.on('ready', function () { setInterval(checkBuild, 5 * 60e3); });
   App.on('minute', function () {
-    var busy = App.idleFor() < 60 || $('#takeover').classList.contains('is-open') || $('#sheetLayer').classList.contains('is-open');
+    // Not while the screen is off: a reload would light it. It reloads once it wakes.
+    var busy = App.mode === 'off' || App.idleFor() < 60 || $('#takeover').classList.contains('is-open') || $('#sheetLayer').classList.contains('is-open');
     if (newBuild && !busy) location.reload();
   });
 })();

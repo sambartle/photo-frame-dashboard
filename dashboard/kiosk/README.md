@@ -25,13 +25,40 @@ URL when run without one.
 Every later launch, including after a reboot, opens the saved URL. Links that other apps open
 in the kiosk, such as a sign-in page, are shown but not saved.
 
-## What the page can ask the kiosk (1.2)
+## What the page can ask the kiosk (1.2, 1.3)
 
 Pages shown in the kiosk get `window.HomeHQKiosk` with two calls:
 
-- `setScreenOff(true|false)`: backlight to zero (the screen still takes taps) or back to Android's
-  own brightness, adaptive if that's on. A new page always starts lit.
-- `info()`: JSON with the kiosk version, device model, Android version and Wi-Fi signal in dBm.
+- `setScreenOff(true|false)`: screen off or back on, see [Screen sleep](#screen-sleep-13). A new
+  page always starts at normal brightness.
+- `info()`: JSON with the kiosk version, device model, Android version, Wi-Fi signal in dBm,
+  `sleep` (whether the sleep right below is enabled) and `screenOn`.
+
+When the screen comes on from a touch or the power button, the kiosk calls
+`window.HomeHQScreenOn()` in the page, which the dashboard uses to leave "screen off".
+
+## Screen sleep (1.3)
+
+Android won't let a plain app put the screen to sleep, and a window brightness of 0 only goes down
+to the panel's minimum (8/255 on the C-2, 10/255 on the PF1007L), so the screen stays faintly lit.
+1.3 can do what the power button does. Enable its sleep right once per frame, over ADB:
+
+```sh
+adb shell dpm set-active-admin com.wesbos.homehq/.ScreenAdmin
+```
+
+This registers the kiosk as a device administrator with a single right, force-lock (screen off and
+lock; it can't wipe or change anything). Then `setScreenOff(true)` calls `lockNow()` and holds a
+wake lock, so the CPU and Wi-Fi keep running while the panel is dark (alerts, check-ins and the
+page's timers carry on). `setScreenOff(false)` wakes it, and a touch wakes it too. Without the
+right, it falls back to dimming the backlight, as in 1.2.
+
+Measured on the C-2 (2026-10-24): sleep with the key event gave `backlight(0)`, and the dashboard
+still checked in 3 minutes later with the screen dark.
+
+To undo: Settings → Security → Device admin apps → Home HQ → Deactivate (it can't be uninstalled
+while it's an administrator, and `dpm remove-active-admin` refuses non-test apps).
+
 
 The dashboard uses them to turn the screen off while everyone is away and to report each frame's
 health in the display controls. Any page shown in the kiosk can call them, so they do nothing more

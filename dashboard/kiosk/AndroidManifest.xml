@@ -6,6 +6,9 @@
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
   <!-- Wi-Fi signal strength for the dashboard's frame health list (normal permission, no prompt) -->
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+  <!-- Keeps the CPU and Wi-Fi running while the screen is asleep, and wakes the screen again
+       (normal permission, no prompt). -->
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
   <!-- Optional; only used if granted with adb (see kiosk README). -->
   <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
 
@@ -16,6 +19,15 @@
       android:usesCleartextTraffic="true"
       android:networkSecurityConfig="@xml/network_security_config"
       android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+    <!-- Only force-lock. Enable once with: adb shell dpm set-active-admin com.wesbos.homehq/.ScreenAdmin -->
+    <receiver android:name=".ScreenAdmin"
+        android:permission="android.permission.BIND_DEVICE_ADMIN"
+        android:exported="true">
+      <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin" />
+      <intent-filter>
+        <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+      </intent-filter>
+    </receiver>
     <service android:name=".NavigationService"
         android:label="@string/navigation_label"
         android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"

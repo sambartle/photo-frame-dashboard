@@ -192,7 +192,8 @@ Press and hold the clock in the left rail (or press **D**) to open them. They sh
 - **Night mode:** four times kept on that frame, so each frame can differ (the bedroom from the
   kitchen). **Dim** and **Bright** are when the photo screen turns into a dim clock and when it goes
   back (10 PM and 6 AM until set); chimes stay quiet in between. **Sleep** and **Wake** are when an
-  untouched frame goes fully dark and comes back (1 AM and 5 AM suggested); they only apply when the
+  untouched frame goes fully dark and comes back (1 AM and 5 AM suggested; kiosk 1.3 with its
+  sleep right enabled puts the screen fully to sleep, older ones only dim it to the panel's minimum); they only apply when the
   button beside them says **On**. A tap or any alert wakes a sleeping frame, and it goes dark again
   after two minutes untouched. A window may cross midnight. Clearing the frame's storage resets the times.
 - **Timeouts:** three times in seconds, kept on that frame: **Today** (back to Today after this long

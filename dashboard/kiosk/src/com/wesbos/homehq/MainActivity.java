@@ -2,6 +2,7 @@ package com.wesbos.homehq;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.admin.DevicePolicyManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -20,6 +21,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
@@ -181,16 +183,69 @@ public class MainActivity extends Activity {
       } catch (PackageManager.NameNotFoundException e) {
         // can't happen for our own package
       }
+      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
       return "{\"kiosk\":\"" + version + "\",\"model\":\"" + Build.MODEL.replace("\"", "") + "\",\"android\":\""
-          + Build.VERSION.RELEASE + "\",\"rssi\":" + rssi + "}";
+          + Build.VERSION.RELEASE + "\",\"rssi\":" + rssi + ",\"sleep\":" + adminActive()
+          + ",\"screenOn\":" + (pm == null || pm.isInteractive()) + "}";
     }
   }
 
-  private void setScreenOff(boolean off) {
+  private PowerManager.WakeLock keepAwake;
+
+  private boolean adminActive() {
+    DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+    return dpm != null && dpm.isAdminActive(new ComponentName(this, ScreenAdmin.class));
+  }
+
+  private void setBrightnessOff(boolean off) {
     WindowManager.LayoutParams lp = getWindow().getAttributes();
     lp.screenBrightness = off ? 0f : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
     getWindow().setAttributes(lp);
   }
+
+  /**
+   * Off: with the device admin enabled, the screen goes fully to sleep like the power button
+   * (backlight 0), while a partial wake lock keeps the CPU and Wi-Fi running so alerts, check-ins
+   * and the page's own clock carry on. Without it, only the backlight goes down to the panel's
+   * minimum. On: restore brightness and, if it was asleep, wake it. A touch wakes a sleeping
+   * screen by itself; the screen-on receiver then tells the page.
+   */
+  private void setScreenOff(boolean off) {
+    PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+    if (off) {
+      if (adminActive()) {
+        try {
+          if (keepAwake == null) {
+            keepAwake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "homehq:screenoff");
+            keepAwake.setReferenceCounted(false);
+          }
+          if (!keepAwake.isHeld()) keepAwake.acquire();
+          ((DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE)).lockNow();
+          return;
+        } catch (RuntimeException e) {
+          Log.w(TAG, "Sleep failed, dimming instead", e);
+        }
+      }
+      setBrightnessOff(true);
+      return;
+    }
+    setBrightnessOff(false);
+    if (keepAwake != null && keepAwake.isHeld()) keepAwake.release();
+    if (pm != null && !pm.isInteractive()) {
+      @SuppressWarnings("deprecation")
+      PowerManager.WakeLock wake = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK
+          | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE, "homehq:wake");
+      wake.acquire(3000);
+    }
+  }
+
+  /** Tells the page the screen came on (a touch or the power button), so it leaves "screen off". */
+  private final BroadcastReceiver screenOn = new BroadcastReceiver() {
+    @Override
+    public void onReceive(Context c, Intent i) {
+      if (web != null) web.evaluateJavascript("window.HomeHQScreenOn && window.HomeHQScreenOn()", null);
+    }
+  };
 
   @Override
   protected void onCreate(Bundle state) {
@@ -219,7 +274,7 @@ public class MainActivity extends Activity {
 
       @Override
       public void onPageStarted(WebView view, String url, Bitmap icon) {
-        setScreenOff(false); // a new page starts lit, whatever the last one asked for
+        setBrightnessOff(false); // a new page starts lit, whatever the last one asked for
         pageFailed = false;
         mainUrl = url;
       }
@@ -289,6 +344,7 @@ public class MainActivity extends Activity {
     IntentFilter connectivity = new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION);
     connectivity.addAction(Intent.ACTION_TIME_CHANGED); // network time arrived after a power cut
     registerReceiver(networkChange, connectivity);
+    registerReceiver(screenOn, new IntentFilter(Intent.ACTION_SCREEN_ON));
   }
 
   @Override
@@ -556,6 +612,8 @@ public class MainActivity extends Activity {
   @Override
   protected void onDestroy() {
     unregisterReceiver(networkChange);
+    unregisterReceiver(screenOn);
+    if (keepAwake != null && keepAwake.isHeld()) keepAwake.release();
     handler.removeCallbacksAndMessages(null);
     if (web != null) web.destroy();
     super.onDestroy();
