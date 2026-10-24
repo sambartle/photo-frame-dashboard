@@ -29,7 +29,7 @@ in the kiosk, such as a sign-in page, are shown but not saved.
 
 Pages shown in the kiosk get `window.HomeHQKiosk` with two calls:
 
-- `setScreenOff(true|false)`: screen off or back on, see [Screen sleep](#screen-sleep-13). A new
+- `setScreenOff(true|false)`: screen off or back on, see [Screen sleep](#screen-sleep-13-131). A new
   page always starts at normal brightness.
 - `info()`: JSON with the kiosk version, device model, Android version, Wi-Fi signal in dBm,
   `sleep` (whether the sleep right below is enabled) and `screenOn`.
@@ -37,7 +37,7 @@ Pages shown in the kiosk get `window.HomeHQKiosk` with two calls:
 When the screen comes on from a touch or the power button, the kiosk calls
 `window.HomeHQScreenOn()` in the page, which the dashboard uses to leave "screen off".
 
-## Screen sleep (1.3)
+## Screen sleep (1.3, 1.3.1)
 
 Android won't let a plain app put the screen to sleep, and a window brightness of 0 only goes down
 to the panel's minimum (8/255 on the C-2, 10/255 on the PF1007L), so the screen stays faintly lit.
@@ -56,7 +56,32 @@ right, it falls back to dimming the backlight, as in 1.2.
 Measured on the C-2 (2026-10-24): sleep with the key event gave `backlight(0)`, and the dashboard
 still checked in 3 minutes later with the screen dark.
 
-To undo: Settings → Security → Device admin apps → Home HQ → Deactivate (it can't be uninstalled
+Not every frame can wake from this. On the **PF1007L** the touchscreen powers down with the display
+(it sent no events at all while asleep, 2026-10-24), so a tap can't wake it. 1.3.1 adds a second way
+for such frames, chosen once per frame and remembered:
+
+```sh
+adb shell am start -n com.wesbos.homehq/.MainActivity --es screenoff backlight   # or lock, dim, auto
+```
+
+- `lock`: the sleep above (the default when the admin right is enabled).
+- `backlight`: the frame stays awake, and "screen off" writes 0 to the display driver's backlight
+  level (`/sys/class/disp/disp/attr/lcdbl`, Allwinner) through `su`; the saved level goes back on
+  wake. The panel is fully black and the touchscreen still works, so a tap wakes it. Android's auto-brightness
+  would push the level back up whenever the room light changed (measured: the panel lit for ~9 s each
+  time), so while dark it also switches `screen_brightness_mode` to manual (`settings put` via `su`),
+  and back to auto on wake. It re-applies the 0 every 0.5 s as a backstop, checks the write took (if
+  `su` refuses it dims instead), puts the level and auto-brightness back when the kiosk pauses or
+  closes, and on the next start if it was killed while dark.
+  Needs `su` available to apps (it was on both of our frames). It tries `su 0 sh -c …` first (the
+  Android 6 `su` of the PF1007L rejects `-c`), then `su -c …`.
+- `dim`: window brightness 0, which only reaches the panel's minimum.
+- `auto`: forget the choice (lock if the admin right is on, else dim).
+
+`info()` reports the mode as `screenoff` and whether the screen is on as `screenOn` (false while held
+dark). The dashboard ignores a tap in the first 1.5 s after going off.
+
+To undo the admin right: Settings → Security → Device admin apps → Home HQ → Deactivate (it can't be uninstalled
 while it's an administrator, and `dpm remove-active-admin` refuses non-test apps).
 
 

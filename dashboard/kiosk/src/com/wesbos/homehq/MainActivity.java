@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -42,6 +43,8 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
@@ -70,6 +73,9 @@ public class MainActivity extends Activity {
   static final String DEFAULT_URL = "https://home-dashboard.wesbos.workers.dev/";
   static final String PREFS = "kiosk";
   static final String PREF_URL = "url";
+  static final String PREF_SCREENOFF = "screenoff";
+  /** Allwinner display driver's backlight level (0-255); root-writable only. */
+  static final String LCDBL = "/sys/class/disp/disp/attr/lcdbl";
   static final long EXIT_HOLD_MS = 1500;
   static final int CANCEL_POINTER_IDS = 10; // touch ids 0-9
   static final long RETRY_MS = 5000;
@@ -186,7 +192,7 @@ public class MainActivity extends Activity {
       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
       return "{\"kiosk\":\"" + version + "\",\"model\":\"" + Build.MODEL.replace("\"", "") + "\",\"android\":\""
           + Build.VERSION.RELEASE + "\",\"rssi\":" + rssi + ",\"sleep\":" + adminActive()
-          + ",\"screenOn\":" + (pm == null || pm.isInteractive()) + "}";
+          + ",\"screenoff\":\"" + screenMode() + "\",\"screenOn\":" + ((pm == null || pm.isInteractive()) && !dark) + "}";
     }
   }
 
@@ -204,16 +210,144 @@ public class MainActivity extends Activity {
   }
 
   /**
-   * Off: with the device admin enabled, the screen goes fully to sleep like the power button
-   * (backlight 0), while a partial wake lock keeps the CPU and Wi-Fi running so alerts, check-ins
-   * and the page's own clock carry on. Without it, only the backlight goes down to the panel's
-   * minimum. On: restore brightness and, if it was asleep, wake it. A touch wakes a sleeping
-   * screen by itself; the screen-on receiver then tells the page.
+   * How "screen off" is done, per frame (the "screenoff" launch extra, saved):
+   *   lock      sleep like the power button (device admin, force-lock) and hold a wake lock so the
+   *             CPU and Wi-Fi keep running. A touch wakes it, if the touchscreen stays powered in
+   *             sleep (the C-2); on the PF1007L it doesn't, so a tap can't wake it.
+   *   backlight keep the frame awake and write 0 to the display driver's backlight level through
+   *             su, and the saved level back on wake. The touchscreen keeps working.
+   *   dim       window brightness 0, which only reaches the panel's minimum.
+   * Unset: lock if the device admin is enabled, else dim.
    */
+  private String screenMode() {
+    String m = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_SCREENOFF, "");
+    if (m.equals("lock") || m.equals("backlight") || m.equals("dim")) return m;
+    return adminActive() ? "lock" : "dim";
+  }
+
+  private void applyScreenOffFlag(Intent intent) {
+    String m = intent == null ? null : intent.getStringExtra(PREF_SCREENOFF);
+    if (m == null) return;
+    if (!m.equals("lock") && !m.equals("backlight") && !m.equals("dim") && !m.equals("auto")) return;
+    SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+    if (m.equals("auto")) e.remove(PREF_SCREENOFF); else e.putString(PREF_SCREENOFF, m);
+    e.apply();
+    Log.i(TAG, "Screen off mode " + m);
+  }
+
+  private int lcdblSaved = -1; // level before going dark
+  private boolean dark;        // backlight route: held at 0 now
+  static final String PREF_AUTO_OFF = "autobright_off"; // we turned auto-brightness off and owe it back
+
+  private int readLcdbl() {
+    try (BufferedReader r = new BufferedReader(new FileReader(LCDBL))) {
+      return Integer.parseInt(r.readLine().trim());
+    } catch (IOException | RuntimeException e) {
+      return -1;
+    }
+  }
+
+  /**
+   * Runs a shell command as root. Two su dialects: "su 0 sh -c" (Android 6 toolbox su, the
+   * PF1007L: it rejects -c) and "su -c" (most others). Uses the first that exits 0. Call off the
+   * UI thread.
+   */
+  private static boolean su(String cmd) {
+    String[][] forms = {{"/system/xbin/su", "0", "sh", "-c", cmd}, {"/system/xbin/su", "-c", cmd}};
+    for (String[] form : forms) {
+      try {
+        Process p = new ProcessBuilder(form).redirectErrorStream(true).start();
+        p.getOutputStream().close();
+        if (p.waitFor() == 0) return true;
+      } catch (IOException | InterruptedException e) {
+        Log.w(TAG, "su failed", e);
+      }
+    }
+    return false;
+  }
+
+  private static String setLevel(int level) { return "echo " + level + " > " + LCDBL; }
+  private static String setAuto(int mode) { return "settings put system screen_brightness_mode " + mode; }
+
+  private int autoMode() {
+    return Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE, 0);
+  }
+
+  /** Android's auto-brightness pushes the level back up as the light changes: the first line of
+   *  defence is switching it off while dark (goDark); this loop is the backstop. */
+  private final Runnable holdDark = new Runnable() {
+    @Override
+    public void run() {
+      if (!dark) return;
+      if (readLcdbl() != 0) new Thread(() -> su(setLevel(0))).start();
+      handler.postDelayed(this, 500);
+    }
+  };
+
+  /** After going dark, check the write took; if su refused, dim instead rather than stay lit. */
+  private final Runnable verifyDark = new Runnable() {
+    @Override
+    public void run() {
+      if (!dark || readLcdbl() == 0) return;
+      Log.w(TAG, "Backlight didn't go to 0; dimming instead");
+      restoreBacklight();
+      setBrightnessOff(true);
+    }
+  };
+
+  private void goDark() {
+    if (dark) return;
+    int now = readLcdbl();
+    if (now > 0) lcdblSaved = now;
+    final boolean wasAuto = autoMode() == 1;
+    if (wasAuto) getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_OFF, true).apply();
+    dark = true;
+    new Thread(() -> {
+      if (wasAuto) {
+        su(setAuto(0));
+        try { Thread.sleep(400); } catch (InterruptedException e) { return; } // let Android react first
+      }
+      su(setLevel(0));
+    }).start();
+    handler.postDelayed(verifyDark, 1500);
+    handler.postDelayed(holdDark, 500);
+  }
+
+  private void restoreBacklight() {
+    if (!dark) return;
+    dark = false;
+    handler.removeCallbacks(holdDark);
+    handler.removeCallbacks(verifyDark);
+    final int level = lcdblSaved > 0 ? lcdblSaved : 255;
+    final boolean owed = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_AUTO_OFF, false);
+    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_AUTO_OFF).apply();
+    new Thread(() -> {
+      su(setLevel(level));
+      if (owed) su(setAuto(1)); // Android then ramps to the right level for the light
+    }).start();
+  }
+
+  /** A kiosk that died while dark leaves the panel at 0 and auto-brightness off: put both back. */
+  private void recoverBacklight() {
+    final boolean owed = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_AUTO_OFF, false);
+    final boolean black = readLcdbl() == 0;
+    if (!owed && !black) return;
+    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_AUTO_OFF).apply();
+    new Thread(() -> {
+      if (black) su(setLevel(255));
+      if (owed) su(setAuto(1));
+    }).start();
+  }
+
   private void setScreenOff(boolean off) {
     PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+    String mode = screenMode();
     if (off) {
-      if (adminActive()) {
+      if (mode.equals("backlight")) {
+        goDark();
+        return;
+      }
+      if (mode.equals("lock") && adminActive()) {
         try {
           if (keepAwake == null) {
             keepAwake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "homehq:screenoff");
@@ -229,6 +363,7 @@ public class MainActivity extends Activity {
       setBrightnessOff(true);
       return;
     }
+    restoreBacklight();
     setBrightnessOff(false);
     if (keepAwake != null && keepAwake.isHeld()) keepAwake.release();
     if (pm != null && !pm.isInteractive()) {
@@ -252,6 +387,9 @@ public class MainActivity extends Activity {
     super.onCreate(state);
     applyDebugFlag(getIntent());
     applyHomeFlag(getIntent());
+    applyScreenOffFlag(getIntent());
+    // A kiosk that died while the backlight was held at 0 would leave the panel black.
+    if (screenMode().equals("backlight")) recoverBacklight();
     keepNavigationEnabled();
     getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         | WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -355,6 +493,7 @@ public class MainActivity extends Activity {
 
   @Override
   protected void onPause() {
+    restoreBacklight(); // leaving the dashboard (menu, launcher): never leave the panel dark
     cancelExit();
     NavigationService.setDashboardVisible(false);
     super.onPause();
@@ -366,6 +505,7 @@ public class MainActivity extends Activity {
     setIntent(intent);
     applyDebugFlag(intent);
     applyHomeFlag(intent);
+    applyScreenOffFlag(intent);
     String url = urlFrom(intent);
     if (url != null) {
       handler.removeCallbacks(retry);
@@ -613,6 +753,7 @@ public class MainActivity extends Activity {
   protected void onDestroy() {
     unregisterReceiver(networkChange);
     unregisterReceiver(screenOn);
+    restoreBacklight();
     if (keepAwake != null && keepAwake.isHeld()) keepAwake.release();
     handler.removeCallbacksAndMessages(null);
     if (web != null) web.destroy();

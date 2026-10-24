@@ -13,7 +13,9 @@
     if (!K) return null;
     try { return JSON.parse(K.info()); } catch (e) { return null; }
   };
+  var offAt = 0;
   App.on('mode', function (m) {
+    if (m === 'off') offAt = Date.now();
     if (m !== 'off') autoOff = false;
     if (K) try { K.setScreenOff(m === 'off'); } catch (e) {}
   });
@@ -48,7 +50,12 @@
     }
   });
   App.on('ready', function () {
-    $('#screenoff').addEventListener('click', function () { App.setMode('day'); App.go('home'); });
+    // Not in the first moments: a screen takes a second to go dark, and a double tap or a bounce on
+    // the button that turned it off would wake it straight away (seen on the PF1007L, 2026-10-24).
+    $('#screenoff').addEventListener('click', function () {
+      if (Date.now() - offAt < 1500) return;
+      App.setMode('day'); App.go('home');
+    });
     // Kiosk 1.3 can put the screen fully to sleep. A touch (or the power button) wakes it, and
     // Android uses up that touch, so the kiosk tells the page the screen came on.
     window.HomeHQScreenOn = function () {
