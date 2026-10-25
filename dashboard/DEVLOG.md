@@ -119,6 +119,19 @@ and check before deploying code that needs them**: in 1.14 the notes migration h
   1.16-1.21, a WebSocket from 1.22). `npm run ha-alerts [-- --with-token]` prints the YAML. A
   `rest_command` only registers after a full HA restart, not a YAML reload. Measured: HA to Worker
   in 0.6 s.
+- **Camera snapshots (1.22.1).** The Cloudflare log showed `/api/ha/camera?id=camera.driveway`
+  failing every 20 s: status 500 after 10.03 s wall, CPU 0, outcome ok. That is Home Assistant's own
+  10 s `camera_proxy` timeout (the camera was asleep or busy), passed through by the Worker, and the
+  frame showed a broken-image icon. `cameraImage` now fetches with an 8 s timeout, keeps the last good
+  picture per camera in the edge cache (6 h, `cam/<id>`), and sends it with `x-stale: <seconds>` when
+  Home Assistant errors, times out or answers with something that isn't an image. A camera with no
+  kept picture gets a real 502/504. The frame's `App.refreshCamera` fetches the picture as a blob and
+  swaps it in only once it has arrived (the old code assigned `img.src` directly, and the doorbell
+  takeover loaded each picture twice: `no-store` made the second assignment a second request). The
+  Home tab's age label shows the oldest picture's age. Also: `/api/ha/art` used the speaker's LAN
+  `entity_picture` (`http://192.168.1.10:8095/…`, unreachable from Cloudflare, so a 403); it now uses
+  `entity_picture_local` (Home Assistant's own proxy, verified present on the Music Assistant speaker)
+  and never fetches a LAN address.
 - **Doorbell off switch.** `home.alerts.doorbell.off: true` drops the doorbell at load time (`alerts`
   in the `CFG` block), so the alert, the camera takeover and the generated Home Assistant YAML all
   ignore it while its settings stay. Added when the new Blink doorbell wasn't ringing in HA. An
@@ -198,6 +211,7 @@ and check before deploying code that needs them**: in 1.14 the notes migration h
 | --- | --- | --- |
 | kiosk 1.3.3 | — | `backlight` mode: Android's auto-brightness pushed lcdbl back up whenever the light changed (0 -> 242, lit ~9 s with the 5 s hold loop; measured by covering the sensor). While dark the kiosk now sets `screen_brightness_mode` to manual via su (`settings put system`), restores the level then auto on wake, holds at 0.5 s, and recovers both on the next start if killed while dark (`autobright_off` pref) |
 | kiosk 1.3.2 | — | `backlight` mode's su call: the PF1007L's Android 6 `su` takes `su 0 sh -c cmd` and rejects `-c` ("invalid uid/gid '-c'"), so 1.3.1's write failed and fell back to dimming (the safety check worked); now tries both forms |
+| 1.22.1 | — | Camera snapshots: the Worker keeps the last good picture and serves it when Home Assistant fails (HA's 10 s camera timeout caused a 500 every 20 s); the frame swaps pictures in only once loaded; media artwork uses `entity_picture_local` instead of an unreachable LAN address; doorbell `off` switch; `refreshBlink` removed |
 | 1.22 | — | Pushed alerts by WebSocket through an `AlertHub` Durable Object: instant, no polling, ~0 CPU while idle (the 1.16 long poll cost 20-22 ms CPU per request); a Durable Object binding and migration in `wrangler.jsonc`; old pages' `?since=` loop held for 20 s so they can't spin |
 | 1.21 | — | HA pushes the dashboard's states to `POST /api/ha-push` (`npm run ha-state`: a rest_command whose template builds the payload in HA, plus an automation on change + every minute); the Worker reads that from D1 (`ha-push`, ~21 KB, 1-3 ms) and falls back to its own `/api/states` read when the push is older than 150 s or a control happened since (`ha-dirty`). Profiled before: 60%+ of a 14-22 ms refresh was decoding and parsing 834 KB to keep 21 KB |
 | 1.20 | — | Worker CPU: HA read back to one `/api/states` (reduced + cached 8 s), finished `/api/home` cached 8 s, home poll 30 s in the day, discovery removed (1.13's per-entity reads cost 14-27 ms CPU per request against the free 10 ms; 100+ CPU-limit hits) |

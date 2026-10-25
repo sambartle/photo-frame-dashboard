@@ -1053,23 +1053,55 @@ async function homeActionRun(env, what, b) {
   return bad('unknown action', 404);
 }
 
+// A camera snapshot, with the last good one kept (at this location's edge cache, for 6 h) and sent
+// instead when Home Assistant fails or is slow: a camera that's asleep or busy makes Home Assistant
+// answer "500" after its own 10 s timeout, which left the frame with a broken-image icon every 20 s.
+// The stale copy says how old it is in x-stale (seconds).
+const CAM_KEEP_S = 6 * 3600;
+async function cameraImage(env, id) {
+  const key = new Request('https://cache.homehq.internal/cam/' + encodeURIComponent(id));
+  const old = async () => {
+    const hit = await caches.default.match(key);
+    if (!hit) return null;
+    const saved = +hit.headers.get('x-saved') || Date.now();
+    return new Response(hit.body, { headers: { 'content-type': hit.headers.get('content-type') || 'image/jpeg', 'cache-control': 'no-store', 'x-stale': String(Math.round((Date.now() - saved) / 1000)) } });
+  };
+  try {
+    const res = await ha(env, '/api/camera_proxy/' + id, { headers: { 'content-type': '' }, signal: AbortSignal.timeout(8e3) });
+    const type = res.headers.get('content-type') || '';
+    if (res.ok && /^image\//.test(type)) {
+      const buf = await res.arrayBuffer();
+      await caches.default.put(key, new Response(buf, { headers: { 'content-type': type, 'x-saved': String(Date.now()), 'cache-control': 'max-age=' + CAM_KEEP_S } })).catch(() => {});
+      return new Response(buf, { headers: { 'content-type': type, 'cache-control': 'no-store' } });
+    }
+    if (res.body) res.body.cancel().catch(() => {});
+    return (await old()) || bad('Home Assistant: camera HTTP ' + res.status, 502);
+  } catch (err) {
+    return (await old()) || bad('camera unavailable', 504);
+  }
+}
+// Addresses only inside the house, which the Worker can't reach from Cloudflare.
+const LAN_URL = /^https?:\/\/(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|[^/]*\.local[:/])/i;
 async function haImage(env, which, url) {
-  let path;
   if (which === 'camera') {
     const id = url.searchParams.get('id');
     const ok = CFG.cameras.some((c) => c.id === id) || (CFG.alerts.doorbell && CFG.alerts.doorbell.camera === id);
     if (!ok) return bad('unknown camera', 404);
-    path = '/api/camera_proxy/' + id;
-  } else {
-    const id = url.searchParams.get('id');
-    if (!id || !mediaAllowed(CFG.home, id)) return bad('no media player', 404);
-    const s = await ha(env, '/api/states/' + id);
-    const pic = s.ok && (await s.json()).attributes.entity_picture;
-    if (!pic) return new Response(null, { status: 404 });
-    if (/^https?:/.test(pic)) return fetch(pic);
-    path = pic;
+    return cameraImage(env, id);
   }
-  const res = await ha(env, path, { headers: { 'content-type': '' } });
+  const id = url.searchParams.get('id');
+  if (!id || !mediaAllowed(CFG.home, id)) return bad('no media player', 404);
+  const s = await ha(env, '/api/states/' + id);
+  const a = s.ok ? (await s.json()).attributes || {} : {};
+  // Music Assistant and similar give a LAN address in entity_picture; Home Assistant also offers the
+  // same picture through itself as entity_picture_local, which the Worker can reach.
+  const pic = a.entity_picture_local || a.entity_picture;
+  if (!pic) return new Response(null, { status: 404 });
+  if (/^https?:/.test(pic)) {
+    if (LAN_URL.test(pic)) return new Response(null, { status: 404 });
+    return fetch(pic);
+  }
+  const res = await ha(env, pic, { headers: { 'content-type': '' } });
   return new Response(res.body, { status: res.status, headers: { 'content-type': res.headers.get('content-type') || 'image/jpeg', 'cache-control': 'no-store' } });
 }
 

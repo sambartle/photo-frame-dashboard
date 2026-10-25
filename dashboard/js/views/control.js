@@ -339,8 +339,12 @@
     V.camTimer = setInterval(function () {
       V.camAge++;
       if (V.camAge >= 20) {
+        // The label says how old the oldest picture is: 0 once they've all refreshed, more if the
+        // Worker had to send one it kept (Home Assistant couldn't get a new one from that camera).
         V.camAge = 0;
-        App.$$('.cam', V.el).forEach(function (b) { b.querySelector('img').src = App.cameraSrc(b.dataset.cam); });
+        App.$$('.cam', V.el).forEach(function (b) {
+          App.refreshCamera(b.querySelector('img'), b.dataset.cam, function (stale) { V.camAge = Math.max(V.camAge, stale); });
+        });
       }
       App.$$('.cam-age', V.el).forEach(function (a) { a.textContent = V.camAge ? V.camAge + 's ago' : 'now'; });
     }, 1000);

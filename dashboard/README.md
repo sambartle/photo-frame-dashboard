@@ -530,7 +530,7 @@ To turn Home Assistant off, remove the `home` section and deploy; the Home tab d
 | `climate` | Thermostat panel | `set_temperature`, `set_hvac_mode` |
 | every `media_player.*` | The **Media** tab: one card per player, playing first | `media_play_pause`, `media_previous_track`, `media_next_track`, `volume_set`, `volume_mute`, `turn_on`, `turn_off` |
 | `scenes` | Scene buttons | `scene.turn_on` |
-| `cameras` | Snapshots, refreshed every 20 s while the Home tab is open | `camera_proxy` |
+| `cameras` | Snapshots, refreshed every 20 s while the Home tab is open. The Worker keeps the last good picture of each camera and sends that if Home Assistant can't get a new one (a sleeping or busy camera makes it answer "500" after 10 s), so the frame never shows a broken image; the age counter shows how old it is | `camera_proxy` |
 
 The **Media** tab finds every media player by itself. Integrations often register one speaker
 several times (Cast and Assistant, old TV entries), so players are merged by name, keeping the most

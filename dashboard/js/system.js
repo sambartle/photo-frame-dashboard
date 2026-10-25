@@ -3,6 +3,25 @@
   'use strict';
   var D = window.DATA, $ = App.$;
 
+  // Refresh a camera picture in place: fetch the new one, and swap it in only once it has arrived, so
+  // a slow or failed refresh (Home Assistant answers a sleeping camera with a 500 after 10 s) leaves
+  // the old picture up instead of a broken-image icon. done(seconds) says how old the picture the
+  // Worker sent is (0 = fresh; it sends the last good one when Home Assistant fails).
+  App.refreshCamera = function (img, id, done) {
+    if (!window.fetch || !window.URL || !URL.createObjectURL) { img.src = App.cameraSrc(id); return; }
+    fetch(App.cameraSrc(id), { credentials: 'same-origin' }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var stale = +r.headers.get('x-stale') || 0;
+      return r.blob().then(function (b) { return { b: b, stale: stale }; });
+    }).then(function (x) {
+      if (!img.isConnected) return;
+      var before = img.getAttribute('data-blob'), url = URL.createObjectURL(x.b);
+      img.onload = function () { if (before) URL.revokeObjectURL(before); };
+      img.setAttribute('data-blob', url);
+      img.src = url;
+      if (done) done(x.stale);
+    }, function () {});
+  };
   App.cameraSrc = function (id) { return '/api/ha/camera?id=' + encodeURIComponent(id) + '&t=' + Date.now(); };
 
   // ------------------------------------------------------------ full-screen takeovers
@@ -57,9 +76,7 @@
     clearInterval(camTimer);
     if (img) camTimer = setInterval(function () {
       if (!img.isConnected) return clearInterval(camTimer);
-      var next = new Image();
-      next.onload = function () { if (img.isConnected) img.src = next.src; };
-      next.src = App.cameraSrc(cfg.doorbellCamera);
+      App.refreshCamera(img, cfg.doorbellCamera);
     }, 2000);
   };
 
