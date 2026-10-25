@@ -5,7 +5,7 @@
   'use strict';
   var D = window.DATA, $ = App.$;
   var CACHE_KEY = 'hq-cache-v1';
-  var PERIOD = { state: 30e3, calendar: 5 * 60e3, weather: 15 * 60e3, home: 10e3 };
+  var PERIOD = { state: 30e3, calendar: 5 * 60e3, weather: 15 * 60e3, home: 30e3 };
   var REDRAW = { state: ['home', 'shopping'], calendar: ['home', 'calendar'], weather: ['home'], home: ['home', 'control', 'media'] };
   var last = {}, due = {}, wrote = {}, cache = {};
   var locked = false;
@@ -91,6 +91,7 @@
       D.rooms = h.rooms; D.devices = merge(D.devices, h.devices);
       D.climate = h.climate; D.cameras = h.cameras; D.scenes = h.scenes;
       D.alertConfig = h.alertConfig;
+      D.homeVia = h.via || null; D.homeViaAt = h.viaAt || 0;
       D.energy = h.energy || null;
       D.checks = h.checks || null;
       D.players = h.players || [];
@@ -140,7 +141,7 @@
   function alerts(prev, now) {
     var cfg = D.alertConfig || {};
     if (cfg.doorbell && now.doorbell && prev.doorbell && now.doorbell.changed !== prev.doorbell.changed &&
-      ['unavailable', 'unknown'].indexOf(now.doorbell.state) < 0) App.doorbell();
+      ['unavailable', 'unknown', 'off'].indexOf(now.doorbell.state) < 0) App.doorbell();
     if (now.leak && !prev.leak) App.leak();
     // Smoke/CO: take over when a detector goes off that wasn't already going off.
     var was = (prev.smoke || []).map(function (s) { return s.name; });
@@ -198,25 +199,44 @@
     }, 5000);
     window.addEventListener('online', function () { Object.keys(PERIOD).forEach(refresh); });
     // Pushed alerts: Home Assistant bumps a counter on the Worker the moment the doorbell, a smoke
-    // alarm or a leak sensor changes. A long poll waits on it in every mode (the Home poll slows to
-    // 60 s on the photo screen and at night): the Worker answers when it moves, or after ~25 s
-    // unchanged, and the next one starts straight away. When it moves, refresh Home now and the
-    // alerts fire. A request every ~25 s instead of every 2 s keeps within the free plan.
-    var alertSeen = null;
-    function alertPoll() {
-      if (locked || !D.hasHome) { setTimeout(alertPoll, 5000); return; }
-      // A connection that hangs (Wi-Fi drops mid-request) is given up after 40 s.
-      var ctl = window.AbortController ? new AbortController() : null;
-      var stop = ctl && setTimeout(function () { ctl.abort(); }, 40e3);
-      fetch('/api/alerts' + (alertSeen === null ? '' : '?since=' + alertSeen), { credentials: 'same-origin', signal: ctl && ctl.signal })
-        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(function (a) {
-          clearTimeout(stop);
-          if (alertSeen !== null && a.seq !== alertSeen) refresh('home');
-          alertSeen = a.seq;
-          alertPoll();
-        }, function () { clearTimeout(stop); setTimeout(alertPoll, 5000); });
+    // alarm or a leak sensor changes, and the Worker sends it down this WebSocket (in every mode: the
+    // Home poll slows to 60 s on the photo screen and at night). When the counter moves, refresh Home
+    // now and the alerts fire. Nothing polls while it's open. A "ping" every 30 s keeps the
+    // connection honest: no "pong" for 75 s means it's dead (Wi-Fi dropped) and it reconnects. While
+    // it's down, ask for the counter every 10 s instead, so an alert is never missed.
+    var alertSeen = null, sock = null, sockOpen = false, backoff = 2000, lastPong = 0;
+    function onAlert(a) {
+      if (alertSeen !== null && a.seq !== alertSeen) refresh('home');
+      alertSeen = a.seq;
     }
-    alertPoll();
+    function reconnect() {
+      sockOpen = false; sock = null;
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 30000);
+    }
+    function connect() {
+      if (locked || !D.hasHome || !window.WebSocket) { setTimeout(connect, 5000); return; }
+      var ws;
+      try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/alerts/ws'); } catch (e) { reconnect(); return; }
+      sock = ws;
+      ws.onopen = function () { sockOpen = true; backoff = 2000; lastPong = Date.now(); };
+      ws.onmessage = function (e) {
+        if (e.data === 'pong') { lastPong = Date.now(); return; }
+        try { onAlert(JSON.parse(e.data)); } catch (err) {}
+      };
+      ws.onclose = function () { if (sock === ws) reconnect(); };
+      ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    }
+    setInterval(function () {
+      if (sockOpen && sock) {
+        if (Date.now() - lastPong > 75000) { try { sock.close(); } catch (e) {} return; }
+        try { sock.send('ping'); } catch (e) {}
+      }
+    }, 30000);
+    setInterval(function () {
+      if (sockOpen || locked || !D.hasHome) return;
+      request('GET', '/alerts').then(onAlert, function () {});
+    }, 10000);
+    connect();
   });
 })();

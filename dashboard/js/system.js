@@ -187,7 +187,7 @@
     (D.calendarErrors || []).forEach(function (e) { bits.push(App.esc(e)); });
     // Short form: "HA offline (unreachable)", not "Home Assistant offline (Home Assistant unreachable)".
     var haErr = (D.homeError || '').replace(/^Home Assistant:?\s*/, '');
-    if (D.hasHome) bits.push(D.homeOnline ? 'HA connected' : 'HA offline' + (haErr ? ' (' + App.esc(haErr) + ')' : ''));
+    if (D.hasHome) bits.push(D.homeOnline ? 'HA connected' + (D.homeVia === 'push' ? ' (pushed)' : D.homeVia === 'read' ? ' (read by the Worker)' : '') : 'HA offline' + (haErr ? ' (' + App.esc(haErr) + ')' : ''));
     return bits.join(' · ');
   }
   // Every wall display that has checked in, newest software first; quiet for 15 min = a problem.

@@ -27,5 +27,8 @@
   "r2_buckets": [
     { "binding": "PHOTOS", "bucket_name": "home-hq-photos" }
   ],
+  // One Durable Object holds every frame's WebSocket for pushed alerts (worker/index.js, AlertHub).
+  "durable_objects": { "bindings": [{ "name": "ALERTS", "class_name": "AlertHub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AlertHub"] }],
   "observability": { "enabled": true }
 }

@@ -9,13 +9,14 @@ const dir = new URL('..', import.meta.url);
 const S = JSON.parse(readFileSync(new URL('settings.json', dir), 'utf8'));
 const wrangler = readFileSync(new URL('wrangler.jsonc', dir), 'utf8');
 const host = (/"pattern":\s*"([^"]+)"/.exec(wrangler) || [])[1] || '<your dashboard address>';
-const al = (S.home && S.home.alerts) || {};
+const al = Object.assign({}, (S.home && S.home.alerts) || {});
+if (al.doorbell && al.doorbell.off) delete al.doorbell; // "off": true: not pushed
 let token = '<ALERT_TOKEN from secrets.json>';
 if (process.argv.includes('--with-token')) token = JSON.parse(readFileSync(new URL('secrets.json', dir), 'utf8')).ALERT_TOKEN || token;
 const list = (ids) => ids.map((id) => '          - ' + id).join('\n');
 
 const triggers = [];
-if (al.doorbell && al.doorbell.entity) triggers.push('      - trigger: state\n        entity_id: ' + al.doorbell.entity + '\n        id: doorbell');
+if (al.doorbell && al.doorbell.entity) triggers.push('      - trigger: state\n        entity_id: ' + al.doorbell.entity + (/^binary_sensor\./.test(al.doorbell.entity) ? '\n        to: "on"' : '') + '\n        id: doorbell');
 if (al.smoke && al.smoke.entities && al.smoke.entities.length) triggers.push('      - trigger: state\n        entity_id:\n' + list(al.smoke.entities) + '\n        to: "on"\n        id: smoke');
 if (al.leak && al.leak.entities && al.leak.entities.length) triggers.push('      - trigger: state\n        entity_id:\n' + list(al.leak.entities) + '\n        to: "on"\n        id: leak');
 if (!triggers.length) { console.error('No doorbell, smoke or leak alerts in settings.json home.alerts.'); process.exit(1); }

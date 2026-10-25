@@ -44,7 +44,9 @@ const CFG = (function () {
     rooms.push({ id, name: r.name });
     (r.devices || []).forEach((d) => devices.push({ entity: d.entity, name: d.name, room: id, garage: !!d.garage }));
   });
-  const alerts = (home && home.alerts) || {};
+  // "off": true on the doorbell turns it off (no alert, no camera takeover) and keeps its settings.
+  const alerts = Object.assign({}, (home && home.alerts) || {});
+  if (alerts.doorbell && alerts.doorbell.off) delete alerts.doorbell;
   const bins = RAW.bins && RAW.bins.every && RAW.bins.every.length ? RAW.bins : null;
   const warnings = RAW.warnings && RAW.warnings.region ? RAW.warnings : null;
   const display = RAW.display || {};
@@ -205,11 +207,11 @@ async function checkFrames(env) {
 // ------------------------------------------------------------------ pushed alerts
 // Polling Home Assistant can't be both light and quick, so for the urgent things (doorbell, smoke
 // and CO, leaks) a Home Assistant automation calls POST /api/alert the moment one changes. That
-// bumps a counter and clears the shared snapshot. Frames long-poll the counter (alertWait: the
-// request waits here until it moves, D1 only, nothing asked of Home Assistant) and refresh at once
-// when it does, so their usual alert logic sees the change within a couple of seconds. One request
-// every ~25 s per frame instead of one every 2 s keeps two frames well inside the free plan's
-// 100,000 requests a day. The 10 s polling stays as the fallback.
+// bumps a counter, clears the shared snapshot, and tells the AlertHub Durable Object, which sends the
+// alert down the WebSocket every frame keeps open (/api/alerts/ws): the frame hears about it
+// within a moment and refreshes Home at once, so its usual alert logic sees the change. Nothing
+// polls, so waiting costs no Worker CPU (a held-open request that re-checked D1 cost 22 ms).
+// The counter in D1 is the fallback for a frame whose socket is down (GET /api/alerts).
 const ALERT_TYPES = ['doorbell', 'smoke', 'leak', 'test'];
 async function pushAlert(req, env, url) {
   const given = url.searchParams.get('t') || ((req.headers.get('authorization') || '').replace(/^Bearer\s+/i, ''));
@@ -219,25 +221,49 @@ async function pushAlert(req, env, url) {
   const seq = (row ? JSON.parse(row.value).seq : 0) + 1;
   await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
     .bind('alert-seq', JSON.stringify({ seq, type, at: Date.now() }), Date.now() + 365 * DAY_MS).run();
-  await forgetSnapshot();
+  await forgetSnapshot(env);
   await caches.default.delete(new Request('https://cache.homehq.internal/ha-fail')).catch(() => {});
+  await alertHub(env, '/bump', { method: 'POST', body: JSON.stringify({ seq, type, at: Date.now() }) }).catch((err) => console.error('alert hub', err));
   return json({ ok: true, seq });
 }
 async function alertSeq(env) {
   const row = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('alert-seq').first();
   return row ? JSON.parse(row.value) : { seq: 0 };
 }
-// GET /api/alerts?since=<seq>: answers as soon as the counter differs from since (checked every
-// second), or after ALERT_WAIT_MS with it unchanged. Waiting costs no CPU time. Without since,
-// answers at once.
-const ALERT_WAIT_MS = 25e3;
-async function alertWait(env, since) {
-  const until = Date.now() + ALERT_WAIT_MS;
-  for (;;) {
-    const a = await alertSeq(env);
-    if (since == null || a.seq !== since || Date.now() >= until) return a;
-    await new Promise((r) => setTimeout(r, 1000));
+// The one AlertHub instance (a Durable Object): it holds every frame's WebSocket. It must be one
+// object so a push, handled by any run of the Worker anywhere, reaches all of them.
+function alertHub(env, path, init) {
+  if (!env.ALERTS) return Promise.reject(new Error('no ALERTS binding'));
+  return env.ALERTS.get(env.ALERTS.idFromName('hub')).fetch('https://alert-hub' + path, init);
+}
+// GET /api/alerts/ws: a frame's WebSocket, handed to the hub.
+function alertSocket(req, env) {
+  if (req.headers.get('upgrade') !== 'websocket') return bad('expected a WebSocket', 426);
+  return alertHub(env, '/socket', { headers: req.headers });
+}
+// Hibernates between messages: while idle it costs nothing, and the frame's 30 s "ping" is answered
+// by the platform without waking it. A new connection is sent the latest alert, so the frame knows
+// the current counter; a bump is sent to every open connection.
+export class AlertHub {
+  constructor(ctx) {
+    this.ctx = ctx;
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
+  async fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === '/bump') {
+      const msg = await req.text();
+      await this.ctx.storage.put('last', msg);
+      this.ctx.getWebSockets().forEach((ws) => { try { ws.send(msg); } catch (e) { /* closing */ } });
+      return new Response('ok');
+    }
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1]);
+    pair[1].send((await this.ctx.storage.get('last')) || '{"seq":0}');
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+  webSocketMessage() { /* pings are answered automatically; nothing else is expected */ }
+  webSocketClose(ws, code) { try { ws.close(code); } catch (e) { /* already closed */ } }
 }
 
 // ------------------------------------------------------------------ sticky notes
@@ -654,13 +680,15 @@ function ha(env, path, init) {
   return fetch(CFG.home.url.replace(/\/$/, '') + path, init);
 }
 
-// ------------------------------------------------------------------ fetching state lightly
-// Home Assistant's /api/states sends every entity (1,766 here, ~800 KB) and a non-admin user can't
-// render templates, so the dashboard asks for the few dozen entities it shows one at a time (a few
-// hundred bytes each, in parallel; Workers allow 50 subrequests per call). A full list is read only
-// every 5 minutes, to discover media players and the alert sensors' batteries. The result is shared
-// by every frame for 8 s through Cloudflare's edge cache; controlling something clears it.
-const SNAP_TTL = 8, DISCOVER_TTL = 300, MAX_FETCH = 45;
+// ------------------------------------------------------------------ reading Home Assistant
+// One GET of /api/states (every entity, ~800 KB here; a non-admin user can't render templates),
+// reduced to the few dozen the dashboard shows plus the media players and the alert sensors'
+// batteries it finds in the same list. The reduced result is shared by every frame for 8 s through
+// Cloudflare's edge cache, so frames, phones and the energy panel cost one read between them;
+// controlling something clears it. (1.13 read the entities one at a time, to spare Home Assistant;
+// 1.20 went back to the single read because the ~36 subrequests cost more Worker CPU than the free
+// plan's 10 ms allows, and Home Assistant copes with it now.)
+const SNAP_TTL = 8;
 async function edgeCache(key, ttl, compute) {
   const req = new Request('https://cache.homehq.internal/' + key);
   const hit = await caches.default.match(req);
@@ -669,7 +697,14 @@ async function edgeCache(key, ttl, compute) {
   await caches.default.put(req, new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json', 'cache-control': 'max-age=' + ttl } }));
   return value;
 }
-function forgetSnapshot() { return caches.default.delete(new Request('https://cache.homehq.internal/ha-snap')).catch(() => {}); }
+// Something was just controlled (or an alert fired): drop this location's shared copies, and mark the
+// pushed state out of date until Home Assistant's next push, so the next reads go to Home Assistant
+// itself and show the change at once.
+function forgetSnapshot(env) {
+  const drop = ['ha-snap', 'home-view'].map((k) => caches.default.delete(new Request('https://cache.homehq.internal/' + k)));
+  if (env) drop.push(putCache(env, 'ha-dirty', { at: Date.now() }, DAY_MS));
+  return Promise.all(drop).catch(() => {});
+}
 function coreIds() {
   const H = CFG.home, al = CFG.alerts, E = H.energy || {}, ids = new Set(['zone.home']);
   CFG.devices.forEach((d) => ids.add(d.entity));
@@ -683,28 +718,6 @@ function coreIds() {
 // sensors belong to the alert devices. Small lists, kept in the edge cache.
 // The last good lists are also kept in D1: when the full list fails (Home Assistant busy or
 // restarting) the small per-entity reads carry on with them instead of failing too.
-async function discover(env) {
-  return edgeCache('ha-discover', DISCOVER_TTL, async () => {
-    let states;
-    try {
-      const res = await ha(env, '/api/states');
-      if (!res.ok) throw new Error('Home Assistant: HTTP ' + res.status);
-      states = await res.json();
-    } catch (err) {
-      const last = await env.DB.prepare('SELECT value FROM cache WHERE key = ?').bind('ha-discover-last').first();
-      if (last) return JSON.parse(last.value);
-      throw err;
-    }
-    const players = playersView(CFG.home, states).map((p) => p.id);
-    const al = CFG.alerts, watched = [].concat((al.leak && al.leak.entities) || [], (al.smoke && al.smoke.entities) || []).map((id) => id.split('.')[1]);
-    const batteries = states.filter((x) => x.entity_id.indexOf('sensor.') === 0 && (x.attributes || {}).device_class === 'battery' &&
-      watched.some((w) => w.indexOf(x.entity_id.slice(7).replace(/_battery(_level)?$/, '')) === 0)).map((x) => x.entity_id);
-    const found = { players, batteries };
-    await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
-      .bind('ha-discover-last', JSON.stringify(found), Date.now() + 30 * DAY_MS).run();
-    return found;
-  });
-}
 // The states the dashboard needs, as /api/states would give them, but only those.
 // A failure is remembered for 30 s: while Home Assistant is down or swamped, frames get "offline"
 // straight away instead of every poll asking it again.
@@ -713,21 +726,64 @@ async function haSnapshot(env) {
   const failed = await caches.default.match(failReq);
   if (failed) throw new Error(await failed.text());
   try {
-    return await haSnapshotFetch(env);
+    // The list of states, with where it came from ('push' or 'read') and when, as properties.
+    const snap = await haSnapshotFetch(env);
+    return Object.assign(snap.states, { via: snap.via, at: snap.at });
   } catch (err) {
     await caches.default.put(failReq, new Response(err.message || 'Home Assistant unreachable', { headers: { 'cache-control': 'max-age=30' } }));
     throw err;
   }
 }
+// Home Assistant pushes the states the dashboard shows to POST /api/ha-push (its automation, see
+// `npm run ha-state`), on every change and once a minute. They're kept in D1 and read here: a few
+// KB to parse instead of Home Assistant's whole 800 KB list, which cost most of the Worker's CPU.
+// Used while it's recent and no control has happened since; otherwise the Worker reads Home
+// Assistant itself, as before, so a broken automation only costs CPU, never the data.
+const PUSH_FRESH_MS = 150e3;
+async function putCache(env, key, value, ttlMs) {
+  await env.DB.prepare('INSERT INTO cache (key, value, expires) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires = excluded.expires')
+    .bind(key, JSON.stringify(value), Date.now() + ttlMs).run();
+}
+// What to keep from a list of states: what's shown, every media player worth listing, and the alert
+// sensors' batteries.
+function reduceStates(all) {
+  const keep = coreIds();
+  playersView(CFG.home, all).forEach((p) => keep.add(p.id));
+  const al = CFG.alerts, watched = [].concat((al.leak && al.leak.entities) || [], (al.smoke && al.smoke.entities) || []).map((id) => id.split('.')[1]);
+  all.forEach((x) => {
+    if (x.entity_id.indexOf('sensor.') === 0 && (x.attributes || {}).device_class === 'battery' &&
+        watched.some((w) => w.indexOf(x.entity_id.slice(7).replace(/_battery(_level)?$/, '')) === 0)) keep.add(x.entity_id);
+  });
+  return all.filter((x) => keep.has(x.entity_id));
+}
+async function pushState(req, env, url) {
+  const given = url.searchParams.get('t') || ((req.headers.get('authorization') || '').replace(/^Bearer\s+/i, ''));
+  if (!env.ALERT_TOKEN || !given || !sameKey(given, env.ALERT_TOKEN)) return bad('locked', 401);
+  const text = await req.text();
+  if (text.length > 2e6) return bad('too large', 413);
+  let b;
+  try { b = JSON.parse(text); } catch (e) { return bad('not JSON', 400); }
+  const list = Array.isArray(b && b.states) ? b.states.filter((x) => x && typeof x.entity_id === 'string' && x.state != null) : [];
+  if (!list.length) return bad('no states', 400);
+  const states = reduceStates(list);
+  await putCache(env, 'ha-push', { at: Date.now(), states }, DAY_MS);
+  return json({ ok: true, kept: states.length, of: list.length });
+}
+async function pushedStates(env) {
+  const rows = await env.DB.prepare("SELECT key, value FROM cache WHERE key IN ('ha-push', 'ha-dirty')").all();
+  let push = null, dirty = 0;
+  rows.results.forEach((r) => { if (r.key === 'ha-push') push = JSON.parse(r.value); else dirty = (JSON.parse(r.value) || {}).at || 0; });
+  return push && Date.now() - push.at < PUSH_FRESH_MS && push.at > dirty ? push : null;
+}
 async function haSnapshotFetch(env) {
   return edgeCache('ha-snap', SNAP_TTL, async () => {
-    const found = await discover(env);
-    const ids = Array.from(new Set(Array.from(coreIds()).concat(found.players, found.batteries))).slice(0, MAX_FETCH);
-    const got = await Promise.all(ids.map((id) => ha(env, '/api/states/' + id).then((r) => (r.ok ? r.json() : null), () => null)));
-    const states = got.filter(Boolean);
-    if (!states.length) throw new Error('Home Assistant unreachable');
-    if (states.length < ids.length / 2) throw new Error('Home Assistant answered only ' + states.length + ' of ' + ids.length);
-    return states;
+    const pushed = await pushedStates(env).catch(() => null);
+    if (pushed) return { via: 'push', at: pushed.at, states: pushed.states };
+    const res = await ha(env, '/api/states');
+    if (!res.ok) throw new Error('Home Assistant: HTTP ' + res.status);
+    const all = await res.json();
+    if (!Array.isArray(all) || !all.length) throw new Error('Home Assistant unreachable');
+    return { via: 'read', at: Date.now(), states: reduceStates(all) };
   });
 }
 async function haService(env, domain, service, data) {
@@ -790,6 +846,7 @@ async function getHome(env) {
     energy: energyView(H.energy, by),
     players: playersView(H, states),
     checks: checksView(al, by),
+    via: states.via, viaAt: states.at,
     alertConfig: {
       doorbell: !!al.doorbell, doorbellCamera: al.doorbell && al.doorbell.camera || null, doorbellLock: al.doorbell && al.doorbell.lock || null,
       waterValve: !!(al.leak && al.leak.valve), smoke: !!(al.smoke && al.smoke.entities && al.smoke.entities.length),
@@ -846,7 +903,7 @@ async function mediaControl(env, id, b) {
     const why = /^(play_pause|next|previous)$/.test(b.do) ? 'nothing to play or resume' : 'it didn’t accept that';
     return bad(name + ': ' + why, 409);
   }
-  await forgetSnapshot();
+  await forgetSnapshot(env);
   return json({ ok: true });
 }
 
@@ -971,13 +1028,13 @@ async function controlDevice(env, entity, p) {
     else if (domain === 'light' && p.level) await haService(env, 'light', 'turn_on', Object.assign({ brightness_pct: Math.max(1, Math.min(100, Math.round(+p.level))) }, target));
     else await haService(env, domain, 'turn_on', target);
   } else return bad('nothing to change');
-  await forgetSnapshot();
+  await forgetSnapshot(env);
   return json({ ok: true });
 }
 
 async function homeAction(env, what, b) {
   const res = await homeActionRun(env, what, b);
-  if (res.ok) await forgetSnapshot();
+  if (res.ok) await forgetSnapshot(env);
   return res;
 }
 async function homeActionRun(env, what, b) {
@@ -1062,9 +1119,17 @@ async function api(req, env, url) {
     await env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('frame:' + r[1]).run();
     return json({ ok: true });
   }
+  if (p === '/alerts/ws' && m === 'GET') return alertSocket(req, env);
   if (p === '/alerts' && m === 'GET') {
-    const since = url.searchParams.get('since');
-    return json(await alertWait(env, since == null || since === '' ? null : +since));
+    // The counter, for a frame whose socket is down. A page from before the socket (1.16-1.21)
+    // sends ?since= and loops straight back on every answer: hold it for 20 s (one sleep, no
+    // database checks) until it has reloaded onto the new page, instead of letting it spin.
+    const a = await alertSeq(env), since = url.searchParams.get('since');
+    if (since !== null && since !== '' && +since === a.seq) {
+      await new Promise((r) => setTimeout(r, 20e3));
+      return json(await alertSeq(env));
+    }
+    return json(a);
   }
   if (p === '/notes' && m === 'POST') return putNote(env, await body(req));
   if ((r = /^\/notes\/([a-z0-9]{6,40})$/.exec(p)) && m === 'DELETE') return clearNote(env, r[1], false);
@@ -1089,7 +1154,8 @@ async function api(req, env, url) {
   if (p.indexOf('/home') === 0 || p.indexOf('/ha/') === 0) {
     if (!CFG.home) return bad('Home Assistant is not configured', 404);
     if (!env.HA_TOKEN) return bad('HA_TOKEN secret is not set', 503);
-    if (p === '/home' && m === 'GET') return json(await getHome(env));
+    // The finished view is shared for 8 s too (frames, phones), on top of the shared states read.
+    if (p === '/home' && m === 'GET') return json(await edgeCache('home-view', SNAP_TTL, () => getHome(env)));
     if (p === '/home/energy' && m === 'GET') return json(await energyToday(env));
     if ((r = /^\/home\/device\/([\w.]+)$/.exec(p)) && m === 'POST') return controlDevice(env, r[1], await body(req));
     if ((r = /^\/home\/media\/(media_player\.\w+)$/.exec(p)) && m === 'POST') return mediaControl(env, r[1], await body(req));
@@ -1125,6 +1191,8 @@ export default {
     if (url.pathname === '/share' && req.method === 'POST') return Response.redirect(url.origin + '/upload?shared=0', 303);
     // Home Assistant pushes urgent alerts here with its own token (ALERT_TOKEN), never the dashboard key.
     if (url.pathname === '/api/alert' && req.method === 'POST') return pushAlert(req, env, url);
+    // ...and the states the dashboard shows (see pushState), with the same token.
+    if (url.pathname === '/api/ha-push' && req.method === 'POST') return pushState(req, env, url);
     if (url.pathname.indexOf('/api/') !== 0) return env.ASSETS.fetch(req);
     if (!sameKey(cookieKey(req) || req.headers.get('x-hq-key'), env.DASHBOARD_KEY)) return bad('locked', 401);
     try {

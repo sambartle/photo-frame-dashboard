@@ -538,20 +538,44 @@ active, and unavailable ones stay hidden until they're back. To tidy the list, a
 `"players": { "exclude": ["media_player.x"], "names": { "media_player.y": "Kitchen" } }` to `home`.
 Controls appear only where the player supports them.
 
+**Push the states (recommended).** By default the Worker reads Home Assistant's whole state list
+(about 800 KB here) to find the few dozen entities it shows, and that parsing costs more Worker
+CPU than Cloudflare's free plan allows (10 ms; a refresh takes 14–22). Let Home Assistant send the
+Worker just those states instead, on every change and once a minute:
+
+```bash
+npm run ha-state -- --with-token
+```
+
+prints a `secrets.yaml` line, a `rest_command` and an automation to paste into Home Assistant, using
+the same `ALERT_TOKEN` as the pushed alerts. After a **full restart** of Home Assistant (a YAML
+reload doesn't register a new `rest_command`), **Status** in the display controls says
+"HA connected (pushed)" and each Home request takes 1–3 ms. If the pushes stop (Home Assistant
+restarting, the automation removed) for 2½ minutes, or you control something from the dashboard,
+the Worker reads Home Assistant itself until the next push, so nothing breaks and it says
+"(read by the Worker)" instead. The pushed states are kept in the dashboard's database, including
+people's positions and media artwork addresses, like the cache. To check the template first, paste
+the `payload` into Home Assistant's Developer tools → Template.
+
 `alerts` turns Home Assistant state into full-screen alerts on the frame. The frames poll Home
-Assistant through the Worker every 10 seconds (every 60 on the photo screen and at night), and the
-Worker shares one read for 8 s, so without help an alert can take a while. **Pushed alerts** make it
+Assistant through the Worker every 30 seconds (every 60 on the photo screen and at night), and the
+Worker shares one read for 8 s, so without help an alert can take half a minute. **Pushed alerts** make it
 a couple of seconds: put a random `ALERT_TOKEN` in `secrets.json` (`openssl rand -hex 16`), run
 `npm run secrets`, then `npm run ha-alerts -- --with-token` prints a `secrets.yaml` line, a
 `rest_command` and an automation for your doorbell, smoke and leak entities to paste into Home
-Assistant. It calls `POST /api/alert` the moment one changes. Each frame keeps one request waiting
-at the Worker for that (up to 25 s, then it asks again; Home Assistant isn't involved), so it
-hears within about a second and refreshes straight away. The token can only do that,
-not read the dashboard. Polling stays as the fallback.
+Assistant. It calls `POST /api/alert` the moment one changes. Each frame keeps one WebSocket
+open to the Worker (a Cloudflare Durable Object, `AlertHub`), which sends the alert down every
+connection at once, so the frame hears within a moment and refreshes straight away, and nothing
+polls while it waits. A frame pings every 30 s and reconnects by itself if the connection drops;
+while it's down it checks the counter every 10 s, so an alert is never missed. The token can only
+do that (and push the states, below), not read the dashboard.
 
 
-- `doorbell`: when the entity changes (a binary sensor or an `event.` entity), show the camera with
-  hold-to-unlock.
+- `doorbell`: when the entity changes (a binary sensor turning on, or an `event.` entity), show the
+  camera with hold-to-unlock. Add `"off": true` inside it to turn the doorbell off for now (no
+  alert, no camera takeover, and `npm run ha-alerts` / `ha-state` leave it out) while keeping its
+  settings; delete that word to turn it back on, and run `npm run ha-alerts` again if you pasted the
+  automation.
 - `leak`: when any listed sensor turns on, take over the screen. If `valve` is set (a `valve.*` or a
   `switch.*`), hold to shut off the water.
 - `smoke`: when any listed smoke or carbon monoxide detector turns on, take over the screen and name
@@ -597,7 +621,7 @@ unreported. **Test alerts → Frame notification** in the display controls sends
   `worker/ics.js` expands recurring events with [ical.js](https://github.com/kewisch/ical.js), and
   handles exceptions, moved occurrences, cancellations and time zones.
 - `js/sync.js` loads data and keeps it fresh: lists every 30 s, calendar every 5 min, weather every
-  15 min, Home Assistant every 10 s (60 s in ambient and night mode), pushed alerts by long poll. It
+  15 min, Home Assistant every 30 s (60 s in ambient and night mode), pushed alerts by WebSocket. It
   saves the last copy on the
   device, so the frame starts instantly and keeps showing something during an outage. Changes on
   screen are optimistic and saved in the background. If a save fails, the frame says so and reloads
@@ -606,8 +630,9 @@ unreported. **Test alerts → Frame notification** in the display controls sends
   fetched on every poll. If a feed fails, the last good copy is shown.
 - Calendars are read through their iCal links. Events added with **+** on the frame are stored in
   D1, and written to Google Calendar too when a service account is set up.
-- The Worker reads Home Assistant one entity at a time and shares the result between all screens
-  for 8 s, so frames add little load to Home Assistant. Details in [DEVLOG.md](DEVLOG.md).
+- The Worker reads Home Assistant's `/api/states` once and shares the result (and the finished
+  Home view) between all screens for 8 s, so frames, phones and the energy panel cost one read
+  between them. Details in [DEVLOG.md](DEVLOG.md).
 
 ## Local development
 
@@ -625,8 +650,8 @@ run `npm run dev`. Vite proxies `/api` to it, and the cookie works on both ports
 ## Costs and limits
 
 Cloudflare's free plan allows 100,000 Worker requests a day, and every request counts, pages and
-images included (`run_worker_first`). A frame with Home Assistant makes about 14,000 a day: Home
-Assistant every 10 s in the day, lists every 30 s, and one pushed-alert request every 25 s.
+images included (`run_worker_first`). A frame with Home Assistant makes about 10,000 a day: Home
+Assistant and lists every 30 s in the day, and one WebSocket that stays open (it counts once, plus a handful of pings).
 Without Home Assistant it's about 3,500. A phone adds a few hundred while the page is open. So
 several frames fit in the free plan; past the limit, requests fail until midnight UTC. Usage is
 under **Workers & Pages → home-hq → Metrics** in the Cloudflare dashboard. D1 and R2 use stay well
