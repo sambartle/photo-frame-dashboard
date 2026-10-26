@@ -319,7 +319,10 @@ frame can differ. Keys: `hq-night` (Dim, Bright, Sleep, Wake, Sleep on/off), `hq
   install restarts the kiosk, and closes one that has run out. `adbd` is only restarted on close if the
   network port was on, so a USB session isn't dropped for nothing. The page shows the state, a
   countdown and `adb connect <ip>:5555` (the kiosk reports `adbIp` from `WifiManager`), and hides the
-  section on kiosks without `adbLeft`. Not yet tried on the frames.
+  section on kiosks without `adbLeft`. Tried by the owner on 2026-10-26 on both frames: 1.4 installed over USB,
+  then the same build installed over Wi-Fi with `deploy-wifi.sh` (the C-2 at 192.168.3.159, the PF1007L at
+  192.168.3.216, a different subnet from the computer at 192.168.10.x); both worked. On the PF1007L the lock
+  was read back afterwards (saved, window closed, no firewall rules left).
 - **Deploy scripts (private, `frames/`).** `deploy-usb.sh` (the old `deploy.sh`, with a guard that
   refuses a network address) and `deploy-wifi.sh <address>`, a wrapper: it tests TCP 5555 first (a
   refusal means the frame is reachable but ADB is off; a time-out means the network is blocking it),
@@ -363,7 +366,7 @@ Dates are 2026; the commit is the one the version shipped in (a commit can hold 
 
 | Version | Commit | Date | What changed |
 | --- | --- | --- | --- |
-| 1.23 / kiosk 1.4 | — | 26 Oct | Wireless ADB: a 5-minute window from the display controls, limited to a saved subnet with firewall rules that fail closed; two deploy scripts per frame (USB and Wi-Fi) |
+| 1.23 / kiosk 1.4 | 96017a3 | 26 Oct | Wireless ADB: a 5-minute window from the display controls, limited to a saved subnet with firewall rules that fail closed; two deploy scripts per frame (USB and Wi-Fi) |
 | 1.22.1 | 75f706e | 25 Oct | Camera snapshots keep the last good picture and are swapped in only once loaded (Home Assistant's 10 s camera timeout caused a 500 every 20 s); media artwork via `entity_picture_local`; doorbell `off` switch; unexplained `refreshBlink` removed |
 | 1.22 | 9319129 | 25 Oct | Alerts over a WebSocket to the `AlertHub` Durable Object: instant, no polling, ~0 CPU idle (the 1.16 long poll cost 20-22 ms per call); old pages' `?since=` loop held for 20 s |
 | 1.21 | 9319129 | 25 Oct | Home Assistant pushes the dashboard's states to `POST /api/ha-push` (`npm run ha-state`); the Worker reads them from D1 and falls back to its own read when they are stale or a control happened (`ha-dirty`); Status shows "(pushed)" |
@@ -405,9 +408,9 @@ Dates are 2026; the commit is the one the version shipped in (a commit can hold 
   Assistant's log for `camera.driveway`, and what kind of camera it is).
 - The doorbell is **off** (`"off": true`): the new Blink doorbell doesn't ring in Home Assistant. Turn
   it back on by deleting the word once there's a sensor that does; then re-run `npm run ha-alerts`.
-- Wireless ADB (kiosk 1.4) is built but not installed: install over USB, save `adbfrom` on each frame, and
-  try `deploy-wifi.sh`. Needs the router to let 192.168.10.0/24 reach the frames on TCP 5555; check that
-  `su` can run `iptables`, `ip6tables` and `stop adbd` on both frames.
+- Wireless ADB (kiosk 1.4) works on both frames, with the subnet lock (`adbfrom`) saved on both: read back
+  over USB on the PF1007L; on the C-2 it was saved by the owner afterwards (the first Wi-Fi install there ran
+  with the 5-minute window open to the whole guest Wi-Fi) and has not been read back.
 - Not yet watched on a real frame: the Sleep/Wake schedule, and an alert waking a dark frame.
 - Kiosk 1.3.3 isn't on the C-2 yet (it's on 1.3, `lock`, which works); the PF1007L is on 1.3.3
   (`backlight`) and still has the unused device-admin right enabled (Android 6 has no
