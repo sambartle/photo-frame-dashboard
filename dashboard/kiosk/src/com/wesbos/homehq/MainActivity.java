@@ -74,6 +74,10 @@ public class MainActivity extends Activity {
   static final String PREFS = "kiosk";
   static final String PREF_URL = "url";
   static final String PREF_SCREENOFF = "screenoff";
+  static final String PREF_ADB_FROM = "adbfrom";   // the subnet allowed to reach wireless ADB, e.g. 192.168.10.0/24
+  static final String PREF_ADB_UNTIL = "adbuntil"; // when the wireless ADB window ends (wall clock, ms)
+  static final long ADB_WINDOW_MS = 5 * 60 * 1000L;
+  static final String ADB_CHAIN = "homehq_adb";
   /** Allwinner display driver's backlight level (0-255); root-writable only. */
   static final String LCDBL = "/sys/class/disp/disp/attr/lcdbl";
   static final long EXIT_HOLD_MS = 1500;
@@ -170,6 +174,12 @@ public class MainActivity extends Activity {
       runOnUiThread(() -> MainActivity.this.setScreenOff(off));
     }
 
+    /** Wireless ADB on for 5 minutes (or off now). See startAdb. */
+    @JavascriptInterface
+    public void setAdb(final boolean on) {
+      runOnUiThread(() -> { if (on) startAdb(); else stopAdb(); });
+    }
+
     /** Kiosk version, device and Wi-Fi signal (dBm), as JSON, for the frame health list. */
     @JavascriptInterface
     public String info() {
@@ -192,8 +202,143 @@ public class MainActivity extends Activity {
       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
       return "{\"kiosk\":\"" + version + "\",\"model\":\"" + Build.MODEL.replace("\"", "") + "\",\"android\":\""
           + Build.VERSION.RELEASE + "\",\"rssi\":" + rssi + ",\"sleep\":" + adminActive()
-          + ",\"screenoff\":\"" + screenMode() + "\",\"screenOn\":" + ((pm == null || pm.isInteractive()) && !dark) + "}";
+          + ",\"screenoff\":\"" + screenMode() + "\",\"screenOn\":" + ((pm == null || pm.isInteractive()) && !dark)
+          + ",\"adbLeft\":" + adbLeftSeconds() + ",\"adbFrom\":\"" + adbFrom() + "\",\"adbIp\":\"" + wifiIp()
+          + "\",\"adbError\":\"" + adbError + "\"}";
     }
+  }
+
+  // ------------------------------------------------------------ wireless ADB (a 5-minute window)
+  // Both frames run root ADB with no key check (ro.adb.secure=0), so ADB on the network is an open root
+  // shell for whoever can reach port 5555. It is therefore off by default, switched on only from the
+  // display controls (someone at the frame), for 5 minutes, and, when a subnet is saved
+  // (--es adbfrom 192.168.10.0/24), reachable only from that subnet: the firewall rules go in first, and
+  // if they can't be made it stays closed. It's the same as `adb tcpip 5555` (service.adb.tcp.port,
+  // restart adbd), done through su; the property is volatile, so a reboot closes it too.
+  private final Handler adbHandler = new Handler(Looper.getMainLooper()); // not cleared in onDestroy: the timer must outlive the activity
+  private String adbError = "";
+  private final Runnable adbOff = new Runnable() {
+    @Override
+    public void run() { stopAdb(); }
+  };
+
+  private static final java.util.regex.Pattern CIDR = java.util.regex.Pattern.compile("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})$");
+
+  /** A well-formed IPv4 subnet only: it goes into a root shell command. */
+  private static boolean validCidr(String c) {
+    java.util.regex.Matcher m = CIDR.matcher(c);
+    if (!m.matches()) return false;
+    for (int i = 1; i <= 4; i++) if (Integer.parseInt(m.group(i)) > 255) return false;
+    return Integer.parseInt(m.group(5)) <= 32;
+  }
+
+  private String adbFrom() {
+    String f = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_ADB_FROM, "");
+    return validCidr(f) ? f : "";
+  }
+
+  /** "--es adbfrom 192.168.10.0/24" saves the allowed subnet; "none" clears it (open to the network). */
+  private void applyAdbFromFlag(Intent intent) {
+    String f = intent == null ? null : intent.getStringExtra(PREF_ADB_FROM);
+    if (f == null) return;
+    SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+    if (f.equals("none")) e.remove(PREF_ADB_FROM);
+    else if (validCidr(f)) e.putString(PREF_ADB_FROM, f);
+    else { Log.w(TAG, "Ignoring bad adbfrom"); return; }
+    e.apply();
+    Log.i(TAG, "Wireless ADB subnet " + f);
+  }
+
+  private long adbLeftSeconds() {
+    long until = getSharedPreferences(PREFS, MODE_PRIVATE).getLong(PREF_ADB_UNTIL, 0);
+    return Math.max(0, (until - System.currentTimeMillis()) / 1000);
+  }
+
+  private String wifiIp() {
+    try {
+      WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+      int ip = wifi != null && wifi.getConnectionInfo() != null ? wifi.getConnectionInfo().getIpAddress() : 0;
+      return ip == 0 ? "" : (ip & 0xff) + "." + ((ip >> 8) & 0xff) + "." + ((ip >> 16) & 0xff) + "." + ((ip >> 24) & 0xff);
+    } catch (RuntimeException e) {
+      return "";
+    }
+  }
+
+  private static String getprop(String name) {
+    try {
+      Process p = new ProcessBuilder("getprop", name).redirectErrorStream(true).start();
+      p.getOutputStream().close();
+      try (BufferedReader r = new BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
+        String line = r.readLine();
+        p.waitFor();
+        return line == null ? "" : line.trim();
+      }
+    } catch (IOException | InterruptedException e) {
+      return "";
+    }
+  }
+
+  private void startAdb() {
+    final String from = adbFrom();
+    adbError = "";
+    new Thread(() -> {
+      boolean ok = true;
+      if (!from.isEmpty()) {
+        // Only that subnet may reach the port, everything else is dropped; IPv6 can't be matched by
+        // subnet here, so it's blocked outright. No rules, no ADB.
+        ok = su("iptables -N " + ADB_CHAIN + " 2>/dev/null; iptables -F " + ADB_CHAIN
+            + " && iptables -A " + ADB_CHAIN + " -s " + from + " -j ACCEPT && iptables -A " + ADB_CHAIN + " -j DROP"
+            + " && (iptables -C INPUT -p tcp --dport 5555 -j " + ADB_CHAIN + " 2>/dev/null"
+            + " || iptables -I INPUT 1 -p tcp --dport 5555 -j " + ADB_CHAIN + ")");
+        su("ip6tables -C INPUT -p tcp --dport 5555 -j DROP 2>/dev/null || ip6tables -I INPUT 1 -p tcp --dport 5555 -j DROP");
+        if (!ok) adbError = "could not set the address lock, so it stays closed";
+      }
+      if (ok) {
+        ok = su("setprop service.adb.tcp.port 5555; stop adbd; start adbd");
+        if (!ok) adbError = "could not start adbd on 5555";
+      }
+      if (ok) {
+        long until = System.currentTimeMillis() + ADB_WINDOW_MS;
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong(PREF_ADB_UNTIL, until).apply();
+        adbHandler.removeCallbacks(adbOff);
+        adbHandler.postDelayed(adbOff, ADB_WINDOW_MS);
+        Log.i(TAG, "Wireless ADB on for 5 minutes" + (from.isEmpty() ? " (open to the network)" : ", from " + from));
+      } else {
+        closeAdb();
+      }
+    }).start();
+  }
+
+  private void stopAdb() {
+    adbHandler.removeCallbacks(adbOff);
+    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_ADB_UNTIL).apply();
+    new Thread(this::closeAdb).start();
+    Log.i(TAG, "Wireless ADB off");
+  }
+
+  /** Close the port and remove our firewall rules. adbd is only restarted if the network port was on, so
+   *  a USB session isn't dropped for nothing. */
+  private void closeAdb() {
+    boolean wasOn = getprop("service.adb.tcp.port").equals("5555");
+    su((wasOn ? "setprop service.adb.tcp.port 0; stop adbd; start adbd; " : "")
+        + "iptables -D INPUT -p tcp --dport 5555 -j " + ADB_CHAIN + " 2>/dev/null; iptables -F " + ADB_CHAIN + " 2>/dev/null;"
+        + " iptables -X " + ADB_CHAIN + " 2>/dev/null; ip6tables -D INPUT -p tcp --dport 5555 -j DROP 2>/dev/null; true");
+  }
+
+  /** The kiosk restarts after an update: keep an open window running to its end, and close one that has
+   *  run out (or that the clock says is over) so it can't be left open. */
+  private void recoverAdb() {
+    final long until = getSharedPreferences(PREFS, MODE_PRIVATE).getLong(PREF_ADB_UNTIL, 0);
+    new Thread(() -> {
+      boolean open = getprop("service.adb.tcp.port").equals("5555");
+      long left = until - System.currentTimeMillis();
+      if (open && left > 0) {
+        adbHandler.removeCallbacks(adbOff);
+        adbHandler.postDelayed(adbOff, left);
+      } else if (open || until != 0) {
+        stopAdb();
+      }
+    }).start();
   }
 
   private PowerManager.WakeLock keepAwake;
@@ -388,6 +533,8 @@ public class MainActivity extends Activity {
     applyDebugFlag(getIntent());
     applyHomeFlag(getIntent());
     applyScreenOffFlag(getIntent());
+    applyAdbFromFlag(getIntent());
+    recoverAdb();
     // A kiosk that died while the backlight was held at 0 would leave the panel black.
     if (screenMode().equals("backlight")) recoverBacklight();
     keepNavigationEnabled();
@@ -506,6 +653,7 @@ public class MainActivity extends Activity {
     applyDebugFlag(intent);
     applyHomeFlag(intent);
     applyScreenOffFlag(intent);
+    applyAdbFromFlag(intent);
     String url = urlFrom(intent);
     if (url != null) {
       handler.removeCallbacks(retry);

@@ -184,6 +184,7 @@
       '<div class="demo-night">' +
       '<label>Peek <input type="number" inputmode="numeric" min="5" max="3600" step="5" data-idle="peek" value="' + App.idle.peek + '" aria-label="Seconds before the night clock"></label>' +
       '<span class="demo-spacer"></span></div></div>' +
+      '<div class="demo-sec" id="demoAdb"></div>' +
       '<div class="demo-sec"><div class="label label--light">Frames</div><div class="demo-frames" id="demoFrames"><p class="demo-note">Checking…</p></div></div>' +
       '<div class="demo-sec"><div class="label label--light">Status</div><p class="demo-note">' + status() + '</p>' +
       '<p class="demo-note">Version ' + __APP_VERSION__ + '</p></div>' +
@@ -223,18 +224,47 @@
       }).join('') : '<p class="demo-note">No frames have checked in yet.</p>';
     }).catch(function () {});
   }
+  // Wireless ADB (kiosk 1.4+): switch it on for 5 minutes from here, so a computer on the allowed subnet
+  // can deploy an update over Wi-Fi. The kiosk keeps the timer and the firewall; this shows the state,
+  // the address to connect to, and counts down while the panel is open.
+  var adbTimer;
+  function fillAdb() {
+    var el = $('#demoAdb'), k = App.kiosk();
+    if (!el) return;
+    if (!k || k.adbLeft === undefined) { el.innerHTML = ''; return; }
+    var left = k.adbLeft, on = left > 0;
+    el.innerHTML = '<div class="label label--light">Wireless ADB</div>' +
+      '<div class="demo-sound"><button data-adb class="' + (on ? 'is-on' : '') + '">' + (on ? 'Turn off' : 'Turn on for 5 min') + '</button>' +
+      '<span class="demo-vol num">' + (on ? Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2) : 'Off') + '</span></div>' +
+      '<p class="demo-note">' + (on
+        ? 'adb connect ' + App.esc(k.adbIp || '<this frame’s address>') + ':5555 · ' + (k.adbFrom ? 'only from ' + App.esc(k.adbFrom) : '<b>open to this whole Wi-Fi</b>')
+        : 'For deploying an update over Wi-Fi. Switches itself off after 5 minutes. ' + (k.adbFrom ? 'Only ' + App.esc(k.adbFrom) + ' can connect.' : 'No address lock is set: anyone on this Wi-Fi could connect while it’s on.')) + '</p>' +
+      (k.adbError ? '<p class="demo-note" style="color:#FF8A80">' + App.esc(k.adbError) + '</p>' : '');
+  }
   App.openDemo = function () {
     var el = $('#demo');
     el.innerHTML = demoHTML();
     el.classList.add('is-open');
     fillFrames();
+    fillAdb();
+    clearInterval(adbTimer);
+    adbTimer = setInterval(function () { if ($('#demo').classList.contains('is-open')) fillAdb(); else clearInterval(adbTimer); }, 1000);
   };
-  function closeDemo() { $('#demo').classList.remove('is-open'); }
+  function closeDemo() { $('#demo').classList.remove('is-open'); clearInterval(adbTimer); }
 
   function demoClick(e) {
     var b = e.target.closest('button');
     if (!b) { if (e.target === $('#demo')) closeDemo(); return; }
     if (b.hasAttribute('data-demo-close')) return closeDemo();
+    if (b.hasAttribute('data-adb')) {
+      var kk = App.kiosk(), K = window.HomeHQKiosk;
+      if (kk && K && K.setAdb) {
+        K.setAdb(!(kk.adbLeft > 0));
+        // The kiosk sets it up in the background (a second or two): look again until it shows.
+        [700, 1500, 3000].forEach(function (ms) { setTimeout(fillAdb, ms); });
+      }
+      return;
+    }
     if (b.hasAttribute('data-modego')) {
       closeDemo();
       // Ambient = rest now, skipping the timeout: the clock still picks the screen (photos, dim

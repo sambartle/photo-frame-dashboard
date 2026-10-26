@@ -25,14 +25,17 @@ URL when run without one.
 Every later launch, including after a reboot, opens the saved URL. Links that other apps open
 in the kiosk, such as a sign-in page, are shown but not saved.
 
-## What the page can ask the kiosk (1.2, 1.3)
+## What the page can ask the kiosk (1.2, 1.3, 1.4)
 
 Pages shown in the kiosk get `window.HomeHQKiosk` with two calls:
 
 - `setScreenOff(true|false)`: screen off or back on, see [Screen sleep](#screen-sleep-13-131). A new
   page always starts at normal brightness.
 - `info()`: JSON with the kiosk version, device model, Android version, Wi-Fi signal in dBm,
-  `sleep` (whether the sleep right below is enabled) and `screenOn`.
+  `sleep` (whether the sleep right below is enabled), `screenOn`, and the wireless ADB state
+  (`adbLeft` seconds, `adbFrom`, `adbIp`, `adbError`).
+- `setAdb(true|false)`: wireless ADB on for 5 minutes, or off now; see
+  [Wireless ADB](#wireless-adb-14).
 
 When the screen comes on from a touch or the power button, the kiosk calls
 `window.HomeHQScreenOn()` in the page, which the dashboard uses to leave "screen off".
@@ -88,6 +91,38 @@ while it's an administrator, and `dpm remove-active-admin` refuses non-test apps
 The dashboard uses them to turn the screen off while everyone is away and to report each frame's
 health in the display controls. Any page shown in the kiosk can call them, so they do nothing more
 than this. Wi-Fi signal needs `ACCESS_WIFI_STATE`, a normal permission granted at install.
+
+## Wireless ADB (1.4)
+
+Installing an update is easier over Wi-Fi than finding the cable. Hold the clock on the dashboard (or
+press **D**), find **Wireless ADB** in the display controls and tap **Turn on for 5 min**. It shows the
+address to connect to, counts down, and switches itself off. It's the same as `adb tcpip 5555`:
+`service.adb.tcp.port` set and `adbd` restarted through `su`, so a reboot closes it too. The timer is kept
+by the kiosk and survives the restart that an install causes.
+
+**Be careful: these frames run root ADB with no key check (`ro.adb.secure=0`),** so while it's on, anyone
+who can reach port 5555 has a root shell. That's why it's off by default, only started by someone at the
+frame, and limited to 5 minutes. Save the subnet your computer is on, once per frame over USB:
+
+```sh
+adb shell am start -n com.wesbos.homehq/.MainActivity --es adbfrom 192.168.10.0/24    # none removes it
+```
+
+With a subnet saved, the kiosk first adds firewall rules (an `iptables` chain `homehq_adb`: accept that
+subnet on port 5555, drop the rest; IPv6 is blocked outright) and **leaves ADB closed if it can't make
+them**. Without one it opens to the whole Wi-Fi, and the control says so. The subnet has to be able to
+reach the frame (a router or firewall rule, and not a guest network that isolates its clients).
+
+Then, with the frame's address from the control:
+
+```sh
+adb connect 192.168.40.23:5555    # and `adb disconnect` when you're done
+```
+
+Frames with a private deploy script can use it to do all of that (this repository has none, since
+`frames/` is gitignored; [DEVLOG.md](../DEVLOG.md) describes the two we use: a USB one, and a Wi-Fi one
+that checks the frame is reachable, connects, runs the USB script's steps and always disconnects).
+The first install of 1.4 has to go over USB. Older kiosks don't show the control.
 
 ## A page bundled in the APK (no server)
 

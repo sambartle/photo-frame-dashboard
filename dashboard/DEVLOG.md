@@ -1,62 +1,93 @@
 # Home HQ dashboard: development log
 
-Technical notes for whoever works on this next: how it's built, why it's built that way, and what
-went wrong along the way. [README.md](README.md) covers setup and day-to-day use. Newest first in
-the version history; everything else is grouped by topic.
+Technical notes for whoever works on this next: how it's built, why it's built that way, what was
+measured, and what went wrong along the way. [README.md](README.md) covers setup and day-to-day use;
+[kiosk/README.md](kiosk/README.md) covers the Android app. The version history is at the end,
+newest first, with the commit each version shipped in.
+
+## Contents
+
+1. [Architecture](#architecture)
+2. [The free plan's CPU budget](#the-free-plans-cpu-budget)
+3. [Home Assistant](#home-assistant)
+4. [Google](#google)
+5. [Screens, night and sleep (per frame)](#screens-night-and-sleep-per-frame)
+6. [Kiosk app](#kiosk-app-kiosk)
+7. [Working on it](#working-on-it)
+8. [Version history](#version-history)
+9. [Open items](#open-items)
 
 ## Architecture
 
 ```
- Frames (kiosk WebView)          Phones (/m, /upload)
-          │  HTTPS, cookie key        │
-          ▼                           ▼
- ┌─────────────── Cloudflare Worker "home-hq" ───────────────┐
- │ static assets (Vite build in dist/) + /api/* in worker/   │
- │ D1 home-hq: groceries, events, notes, photos, cache, …    │
- │ R2 home-hq-photos: full/<id>.jpg, small/<id>.jpg          │
- │ edge cache (caches.default): HA snapshot, home view      │
- │ cron */5: frame health → HA notify                        │
- └──┬──────────────┬──────────────┬──────────────┬───────────┘
-    │              │              │              │
- Google iCal   Open-Meteo,    Home Assistant   Google Routes API,
- feeds (read)  Met Office RSS (Cloudflare      Google Calendar API
-                              Tunnel, REST)    (service account)
-          ▲
-          └── HA automation POSTs /api/alert?t=ALERT_TOKEN (pushed alerts)
+ Frames (kiosk WebView)                 Phones (/m, /upload)
+   │ HTTPS + cookie key                    │
+   │ WebSocket /api/alerts/ws              │
+   ▼                                       ▼
+ ┌──────────────────── Cloudflare Worker "home-hq" ─────────────────────┐
+ │ static assets (Vite build, dist/) + /api/* (worker/index.js)         │
+ │ D1 home-hq   groceries, events, notes, photos, cache (incl. the      │
+ │              pushed Home Assistant states)                           │
+ │ R2           home-hq-photos: full/<id>.jpg, small/<id>.jpg           │
+ │ edge cache   (per data centre) HA snapshot, finished /api/home view, │
+ │              last good camera pictures                               │
+ │ AlertHub     Durable Object holding every frame's WebSocket          │
+ │ cron */5     frame health -> Home Assistant notify                   │
+ └──┬──────────────┬─────────────┬───────────────┬──────────────────────┘
+    │              │             │               │
+ Google iCal   Open-Meteo,   Home Assistant   Google Routes API,
+ feeds (read)  Met Office    (Cloudflare      Google Calendar API
+               RSS           Tunnel, REST)    (service account)
+                                ▲
+   HA automations POST /api/alert (urgent alerts) and /api/ha-push (states),
+   both with ALERT_TOKEN
 ```
 
-- **One Worker serves everything.** `wrangler.jsonc` binds `ASSETS` (the Vite output), `DB` (D1)
-  and `PHOTOS` (R2), and runs `scheduled()` every 5 minutes. It's on the custom domain
-  `homehq.sambartle.co.uk`; `workers_dev` is off. Before any upstream PR, replace the personal
-  values in `wrangler.jsonc` and `tools/moved/wrangler.jsonc` with placeholders.
+- **One Worker serves everything.** `wrangler.jsonc` binds `ASSETS` (the Vite output), `DB` (D1),
+  `PHOTOS` (R2) and `ALERTS` (the `AlertHub` Durable Object), and runs `scheduled()` every 5
+  minutes. It's on the custom domain `homehq.sambartle.co.uk`; `workers_dev` is off. Before any
+  upstream PR, replace the personal values in `wrangler.jsonc` and `tools/moved/wrangler.jsonc`
+  with placeholders.
 - **Config split.** `settings.json` (gitignored) is imported into the Worker at build time, so a
   settings change needs `npm run deploy`. `secrets.json` (gitignored, mode 600) is uploaded with
   `wrangler secret bulk` by `tools/secrets.mjs`, so a secret change needs no deploy. The browser
   only sees what the API chooses to send (names, colours, lists), never keys or tokens.
-- **Auth.** `DASHBOARD_KEY` arrives once as `?key=`, moves into an HttpOnly cookie (`hq`, 10 years), and is
-  stripped from the address bar. Two exceptions: `POST /api/alert` takes `ALERT_TOKEN` (it can only
-  bump the alert sequence), and `POST /share` (the Android share target) redirects to the upload
-  page when it can't handle the request.
+- **Auth.** `DASHBOARD_KEY` arrives once as `?key=`, moves into an HttpOnly cookie (`hq`, 10
+  years) and is stripped from the address bar. Exceptions: `POST /api/alert` and `POST
+  /api/ha-push` take `ALERT_TOKEN` instead (it can push alerts and states, nothing else), and `POST
+  /share` (the Android share target) redirects to the upload page when it can't handle the request.
 - **Front end.** Plain ES modules and IIFEs, no framework, built by Vite. `window.DATA` (`D`) is
   the shared state; `js/sync.js` fills it and emits `data`; views in `js/views/` register with
   `App.register` and redraw from `D`. The last good copy is kept in `localStorage`, so a frame
   starts instantly and survives outages. Saves are optimistic and roll back on failure.
 - **Version.** `package.json` `version` becomes `__APP_VERSION__` (shown under Status in the display
-  controls) and the build writes `build.json` with a build id. Frames poll it and reload after a
-  deploy (checked every 5 min) once nobody has touched the screen for a minute.
-- **Must work on WebView 106** (the PF1007L, Android 6): ES2022 at most; check newer JS and CSS against
-  [`docs/building-for-the-frame.md`](../docs/building-for-the-frame.md).
+  controls); the build writes `build.json` with a build id. Frames check it every 5 minutes and
+  reload after a deploy once nobody has touched the screen for a minute (not while the screen is
+  off, so a reload never lights it).
+- **Must work on WebView 106** (the PF1007L, Android 6): ES2022 at most; check newer JS and CSS
+  against [`docs/building-for-the-frame.md`](../docs/building-for-the-frame.md).
+- **Sounds (1.9).** Synthesised with the Web Audio API (`js/sound.js`), no audio files. Chimes
+  (doorbell, leave now, bins, new note) are quiet at night, in night mode and while everyone is
+  away; smoke, CO and leak alarms always sound and repeat. Mute and volume are per frame.
+- **Notes (1.14).** `notes` table; a note for one person is also pushed to their phone through
+  `people[].notify`. Cleared notes keep their row so Undo works.
+- **Bins (1.3).** Collection dates are computed from the council's rotation in `settings.json`
+  (`bins.every`, `bins.moved`); Rotherham has no usable lookup API. "They're out" is stored as
+  `bins-out`. Bank-holiday moves go in `bins.moved`.
+- **Share target (1.5).** `public/m.webmanifest` + `public/share-sw.js` put the phone page in
+  Android's share menu; the images go to the upload page.
 
 ### Polling
 
 | What | Day | Ambient / night | Notes |
 | --- | --- | --- | --- |
 | `/api/state` (shopping, notes, bins, frames) | 30 s | 30 s | |
-| `/api/calendar` | 5 min | 5 min | Worker re-parses feeds at most every 10 min |
+| `/api/calendar` | 5 min | 5 min | the Worker re-parses the feeds at most every 10 min |
 | `/api/weather` | 15 min | 15 min | includes Met Office warnings (10 min) |
-| `/api/home` | 30 s | 60 s | served from an 8 s edge cache |
-| `/api/alerts/ws` | WebSocket | WebSocket | the `AlertHub` Durable Object pushes alerts; ping every 30 s; `/api/alerts` (the counter) every 10 s only while the socket is down |
-| `build.json` | 5 min | 5 min | auto-reload after deploy |
+| `/api/home` | 30 s | 60 s | from the pushed states; also refreshed at once on an alert or after a control |
+| `/api/alerts/ws` | WebSocket | WebSocket | ping every 30 s; while it's down, `GET /api/alerts` every 10 s |
+| camera pictures | 20 s on the Home tab | | 2 s for the doorbell takeover |
+| `build.json` | 5 min | 5 min | auto-reload after a deploy |
 | heartbeat `/api/frames` | 5 min | 5 min | kiosk 1.2+ or `?frame=` screens only |
 
 ### D1
@@ -67,184 +98,325 @@ the version history; everything else is grouped by topic.
 | `events` | events added on the frame; `gcal`/`gid` (0002) link the Google copy |
 | `notes` | sticky notes (0003); cleared notes keep `cleared` so Undo works |
 | `photos` | photo metadata; images in R2 |
-| `cache` | key/value with expiry: `calendar`, `weather`, `warnings`, `bins-out`, `frame:<id>`, `alert-seq`, `energy-yday:<midnight>`, `energy-today`, drive times and the daily drive budget |
+| `cache` | key/value with expiry (below) |
 | `chore_log` | unused since 1.3 (chores removed); kept so old data isn't lost |
+
+`cache` keys: `calendar`, `weather`, `warnings`, `bins-out`, `frame:<id>` (heartbeats),
+`frame-alerts`, `alert-seq` (the last alert, the fallback for a frame without a socket), `ha-push`
+(the pushed Home Assistant states, with when they arrived), `ha-dirty` (set by a control or an alert:
+the pushed copy is out of date until the next push), `energy-yday:<midnight>`, `energy-today`, the
+drive-time lookups and the daily drive budget.
 
 Migrations live in `migrations/` and are applied with `npm run db:migrate`. **Apply them remotely
 and check before deploying code that needs them**: in 1.14 the notes migration hadn't applied and
-`/api/state` failed for about a minute after the deploy.
+`/api/state` failed for about a minute after the deploy. The Durable Object has its own migration
+(`migrations` in `wrangler.jsonc`, `new_sqlite_classes`, the kind the free plan allows), applied by
+the deploy.
+
+## The free plan's CPU budget
+
+Cloudflare's free plan allows **10 ms of CPU per request** (waiting for I/O is free) and 100,000
+requests a day. Subrequests include D1 and R2 calls, with a limit of 50 per request.
+
+**What happened.** The Cloudflare dashboard (Metrics, errors) showed **986 "Exceeded CPU Time
+Limits"** in the week to 25 October: none before the 1.16 deploy (version `0c7b31ac`), the first
+shortly after it, the most on 24 October when both frames were on, none after the 1.22 deploy (the
+frames were off by then, so that isn't proven yet; check again after a day or two with them on).
+
+**How it was measured.** `npx wrangler tail home-hq --format json` prints one event per request with
+`cpuTime`, `wallTime`, `outcome` and the response status; the events are pretty-printed JSON, not
+one per line. To split a request's cost into steps, bundle the Worker with esbuild
+(`--bundle --format=esm --platform=node --loader:.json=json`), run `default.fetch` in Node with a
+stand-in `caches.default`, `fetch` and D1, and use `node --cpu-prof`. Add
+`crypto.subtle.timingSafeEqual` (Workers-only) to the stand-in.
+
+**What it cost, in ms of CPU per request:**
+
+| Request | 1.13-1.19 (entities one by one) | 1.20-1.21 (one read) | Now (1.22.1, pushed) |
+| --- | --- | --- | --- |
+| `/api/home`, refreshing | 14-43 | 14-32 | 1-6 typical; 10-22 once after an alert or a control (a direct read) |
+| `/api/home`, cached | 2-10 | 1-3 | 1-3 |
+| `/api/home/energy`, recomputing | 27-35 | 18 | 11 |
+| `/api/calendar`, refreshing | 14 | | 9 |
+| `/api/state` | 2-16 | | 3-5 |
+| `/api/alerts` (the 1.16 long poll, 1.16-1.21) | **20-22** | **20-22** | gone |
+| alert push (`POST /api/alert`) | | | 3-5 |
+| state push (`POST /api/ha-push`) | | | 2-12 (median 5) |
+| WebSocket connect / `AlertHub` | | | 1 / 0 |
+| camera picture | 0-4 | | 0-4 |
+
+**Where it went:**
+- A refresh of `/api/home` is dominated by turning Home Assistant's whole state list (1,802
+  entities, 834 KB, 110 KB gzipped) into objects to keep 21 KB (2.5%): about 2.6 ms to unpack, 6 ms
+  (12 on a cold start) to `JSON.parse`, ~10% decoding the bytes to text, ~9% our filter loop.
+  Reading the ~36 entities one at a time (1.13) cost the same in fetch overhead. The fix is to not
+  receive the list: see [Pushed states](#home-assistant).
+- The 1.16 alert long poll re-read D1 once a second for 25 s, about 0.85 ms each, so 20-22 ms per
+  call. A push is a separate run of the Worker, which can't signal the waiting one, so polling D1
+  was the only way to notice it. A Durable Object can be told directly: see [Alerts](#home-assistant).
+- `caches.default` is **per data centre**, not global. Anything that one request writes for another
+  to read must go through D1 (or a Durable Object), not the edge cache.
+- A frame with Home Assistant now makes about 10,000 requests a day (Home and lists every 30 s,
+  plus the pushes it triggers), well under the 100,000 limit.
 
 ## Home Assistant
 
 - Reached through a Cloudflare Tunnel at the house, with a long-lived token of a non-admin
-  "Frame" user. Non-admin users get **401 from `/api/template`**, so everything is built from
-  `/api/states/<id>` and `/api/history`.
-- **Load (1.13, partly undone in 1.20).** The first version fetched the full `/api/states` every
-  10 s per frame, which on a busy install is megabytes; HA's VM ran out of RAM. 1.13 read the ~36
-  entities one by one and ran a full read for discovery every 5 min. That cut HA's load but cost
-  the Worker 14-27 ms CPU per `/api/home` (43 ms with discovery), 2-4x the free plan's 10 ms, and
-  the Worker hit the CPU limit 100+ times in a few days. The HA VM has been fixed and copes with
-  full reads, so 1.20 went back:
-  - `haSnapshotFetch` does one `GET /api/states`, keeps `coreIds()` + the media players
-    `playersView` finds + the alert sensors' batteries, and caches that reduced list for 8 s in
-    the edge cache (`ha-snap`), so frames, phones and the energy panel share one read. `discover()`
-    and `ha-discover-last` are gone: players and batteries come from the same read.
-  - `/api/home` itself is cached 8 s too (`home-view`); `forgetSnapshot()` clears both.
-  - Frames poll `/api/home` every 30 s in the day (was 10 s): urgent alerts are pushed now.
-  - Measured with `wrangler tail` (it reports `cpuTime`): `/api/home` refreshing 14-27 ms, cached
-    2-10 ms; energy recompute 27-35 ms, calendar refresh 14 ms.
-  - Every HA call has a timeout (15 s, history 30 s). After a failure the Worker stops asking for
-    30 s (`ha-fail`), so a struggling HA isn't hammered.
-  - Any action (`/api/home/...`) calls `forgetSnapshot()` so the next read is fresh.
-- **History API gotcha:** without `end_time`, `/api/history/period/<start>` returns one day from
-  `start`, not "until now". This once made a working smart meter look stuck for days.
-- **Pushed states (1.21).** Profiling the real Worker code (Node, a copy of the HA list): a refresh
-  is ~11.5 ms JS + ~2.6 ms gunzip + runtime overhead; 45% is `JSON.parse` of the 834 KB list, 10%
-  UTF-8 decode, 9% our filter loop, the rest small, to keep 21 KB (2.5%). So HA pushes instead:
-  `tools/ha-state.mjs` prints a `rest_command` (payload templated in HA with `expand([...])`,
-  `states.media_player`, battery sensors, `to_json`) and an automation (state change of the quiet
-  entities, plus every minute; `queued`, 2 s delay between pushes). `pushState` (same `ALERT_TOKEN`)
-  reduces it with `reduceStates` and stores `ha-push` in D1: it has to be D1, not the edge cache,
-  because `caches.default` is per data centre and HA's POST lands in a different one from the
-  frame's GET. `haSnapshotFetch` uses it while fresh (150 s) and newer than `ha-dirty` (set by
-  `forgetSnapshot(env)` on a control or alert), else reads HA directly as in 1.20.
-  The payload template sends a fixed list of 25 attributes (`KEEP` in `tools/ha-state.mjs`, the
-  ones `worker/index.js` reads), not `s.attributes` whole: `to_json` fails with "Type is not JSON
-  serializable: datetime.datetime" on entities with a datetime attribute (media players have
-  `media_position_updated_at`). Add to the list if the Worker starts reading another attribute.
-- **Pushed alerts (1.15).** Polling every 10 s plus the 8 s snapshot meant a doorbell could take
-  ~20 s. Now an HA automation calls `rest_command.homehq_alert` → `POST /api/alert?t=ALERT_TOKEN`
-  with a type (`doorbell`, `smoke`, `leak`, `test`). The Worker bumps `alert-seq` in D1 and clears
-  `ha-snap` and `ha-fail`; frames fetch `/api/home` at once when the sequence changes (long poll in
-  1.16-1.21, a WebSocket from 1.22). `npm run ha-alerts [-- --with-token]` prints the YAML. A
-  `rest_command` only registers after a full HA restart, not a YAML reload. Measured: HA to Worker
-  in 0.6 s.
+  "Frame" user. Non-admin users get **401 from `/api/template`**, so states are read with
+  `/api/states` and `/api/history`.
+- **How states reach the Worker.** Home Assistant pushes them, with a fallback to reading:
+  1. **Push (1.21).** `npm run ha-state` prints a `rest_command` and an automation. The payload is
+     templated inside Home Assistant (`expand([...])`, `states.media_player`, battery sensors,
+     `to_json`) with a fixed list of 25 attributes (`KEEP` in `tools/ha-state.mjs`: the ones
+     `worker/index.js` reads; add to it if the Worker starts reading another). It must not send
+     `s.attributes` whole: `to_json` fails with "Type is not JSON serializable: datetime.datetime"
+     on entities with a datetime attribute (media players have `media_position_updated_at`). The
+     automation fires on a change of the quiet entities and every minute (which also carries the
+     busy power and cost sensors); mode `queued`, 2 s between pushes. `pushState` (same
+     `ALERT_TOKEN`) reduces it with `reduceStates` and stores `ha-push` in D1.
+  2. **Read (fallback).** `haSnapshotFetch` uses the pushed copy while it is fresh (150 s) and newer
+     than `ha-dirty`. Otherwise it does one `GET /api/states`, reduces it the same way and caches the
+     result 8 s in the edge cache (`ha-snap`). A control or an alert sets `ha-dirty` (`forgetSnapshot(env)`),
+     so the next reads go to Home Assistant itself and show the change at once, because the push for
+     it hasn't arrived yet. `/api/home` is cached 8 s per location too (`home-view`).
+  3. Every Home Assistant call has a timeout (15 s, history 30 s). After a failure the Worker stops
+     asking for 30 s (`ha-fail`), so a struggling Home Assistant isn't hammered. Status in the
+     display controls says "(pushed)" or "(read by the Worker)".
+- **History of the read.** The first version fetched `/api/states` every 10 s per frame (800 KB x
+  12 a minute) and the Home Assistant VM ran out of RAM. 1.13 read the ~36 entities one by one and
+  did a full read for discovery every 5 minutes: kind to Home Assistant, but 14-27 ms of Worker CPU.
+  The VM has since been fixed and copes with full reads, so 1.20 went back to one read, and 1.21 added
+  the push so the Worker normally doesn't read at all.
+- **Alerts (1.15, 1.16, 1.22).** Polling every 10 s plus an 8 s cache meant a doorbell could take
+  ~20 s, so urgent entities are pushed: an automation (`npm run ha-alerts`) calls
+  `rest_command.homehq_alert` -> `POST /api/alert?t=ALERT_TOKEN` with a type (`doorbell`,
+  `smoke`, `leak`, `test`). The Worker bumps `alert-seq` in D1 and clears the snapshot. A
+  `rest_command` only registers after a full Home Assistant restart, not a YAML reload.
+  - 1.15 had the frames poll the counter every 2 s: 43,200 requests a day per frame, which put two
+    frames over the 100,000 limit.
+  - 1.16 held the request open in the Worker (a long poll): ~3,500 a day, but 20-22 ms of CPU per call.
+  - **1.22: one WebSocket per frame to the `AlertHub` Durable Object** (`/api/alerts/ws`). `pushAlert`
+    posts to the hub, which sends the alert to every open socket at once, so waiting costs nothing and
+    an alert arrives in a fraction of a second. The hub hibernates between messages;
+    `setWebSocketAutoResponse('ping','pong')` answers the frame's 30 s ping without waking it. A
+    new socket is sent the last alert (the counter). The frame reconnects with a 2-30 s back-off and,
+    while down, reads `GET /api/alerts` every 10 s so an alert is never missed. Pages from 1.16-1.21
+    still send `?since=` and loop straight back on every answer, so the Worker holds that one call
+    for 20 s with a single sleep until they have reloaded, instead of letting them spin through the
+    request quota. Tested locally and live: two sockets both receive a push, ping/pong, a late joiner
+    gets the latest, 401 without the key, reconnect after a server restart.
+  - **Doorbell off switch.** `home.alerts.doorbell.off: true` drops the doorbell when settings load,
+    so the alert, the camera takeover and the generated Home Assistant YAML all ignore it while its
+    settings stay. Added while the new Blink doorbell wasn't ringing in Home Assistant.
 - **Camera snapshots (1.22.1).** The Cloudflare log showed `/api/ha/camera?id=camera.driveway`
-  failing every 20 s: status 500 after 10.03 s wall, CPU 0, outcome ok. That is Home Assistant's own
-  10 s `camera_proxy` timeout (the camera was asleep or busy), passed through by the Worker, and the
-  frame showed a broken-image icon. `cameraImage` now fetches with an 8 s timeout, keeps the last good
-  picture per camera in the edge cache (6 h, `cam/<id>`), and sends it with `x-stale: <seconds>` when
-  Home Assistant errors, times out or answers with something that isn't an image. A camera with no
-  kept picture gets a real 502/504. The frame's `App.refreshCamera` fetches the picture as a blob and
-  swaps it in only once it has arrived (the old code assigned `img.src` directly, and the doorbell
-  takeover loaded each picture twice: `no-store` made the second assignment a second request). The
-  Home tab's age label shows the oldest picture's age. Also: `/api/ha/art` used the speaker's LAN
-  `entity_picture` (`http://192.168.1.10:8095/…`, unreachable from Cloudflare, so a 403); it now uses
-  `entity_picture_local` (Home Assistant's own proxy, verified present on the Music Assistant speaker)
-  and never fetches a LAN address.
-- **Doorbell off switch.** `home.alerts.doorbell.off: true` drops the doorbell at load time (`alerts`
-  in the `CFG` block), so the alert, the camera takeover and the generated Home Assistant YAML all
-  ignore it while its settings stay. Added when the new Blink doorbell wasn't ringing in HA. An
-  unexplained uncommitted `refreshBlink` (re-trigger the Blink camera at most every 10 s on each
-  look at the doorbell camera, for stale thumbnails) and its README paragraph were found and
-  removed on 2026-10-25.
-- **Alert WebSocket (1.22).** The 1.16 long poll made `/api/alerts` the most expensive request
-  there was: measured with `wrangler tail`, 20-22 ms CPU per call, because the Worker re-checked D1
-  once a second for 25 s (~0.85 ms each) and a push is a separate run of the Worker that can't
-  signal the waiting one. Now one Durable Object, `AlertHub` (SQLite-backed, so it's available on
-  the free plan; `durable_objects` + `migrations` in `wrangler.jsonc`), holds every frame's
-  hibernating WebSocket (`/api/alerts/ws`): `pushAlert` posts to it and it sends to all sockets, so
-  an alert arrives at once and waiting costs nothing. `setWebSocketAutoResponse('ping','pong')`
-  answers the frame's 30 s ping without waking it. A new socket is sent the last alert (the counter);
-  the frame reconnects with a 2-30 s back-off and, while down, reads `GET /api/alerts` every 10 s.
-  Pages from 1.16-1.21 still send `?since=` and loop straight back on every answer, so the Worker
-  holds that one call for 20 s with a single sleep until they've reloaded, rather than letting them
-  spin through the request quota. Tested locally: two sockets both receive a push, ping/pong, a
-  late joiner gets the latest, 401 without the key, and a page reconnects after a server restart.
-- **Long poll (1.16, replaced in 1.22).** 1.15 polled `/api/alerts` every 2 s: 43,200 requests a day per frame, so
-  two frames (~106k with everything else) went over the free plan's 100,000 a day, after which
-  every request fails until midnight UTC. Now the request waits in the Worker (`alertWait`,
-  `ALERT_WAIT_MS` = 25 s, D1 checked every second; waiting costs no CPU time) and the frame asks
-  again at once, so ~3,500 a day per frame and ~14k in all per frame. The frame gives up a hung
-  request after 40 s and retries after 5 s on errors. Tested: no push answers at 26 s, a push
-  at 3 s answers at 3.3 s.
-- **Energy (1.10).** kWh today is integrated from `power` history (`wattHours`), hourly bars for
-  today (cached 15 min) and yesterday (cached for the day). DCC smart meter `usage` sensors arrive
-  hours late, so they're only used to say when the meter last reported.
-- **Media (1.11).** `playersView` finds every `media_player.*` during discovery, merges duplicates
-  by friendly name (Cast + Assistant SDK + old TV entries), ranks by `MEDIA_RANK`, and hides
+  failing every 20 s: status 500 after 10.03 s wall, 0 ms CPU, outcome "ok". That is Home
+  Assistant's own 10 s `camera_proxy` timeout (the camera asleep or busy), passed through by the
+  Worker, and the frame showed a broken-image icon. `cameraImage` now fetches with an 8 s timeout,
+  keeps the last good picture per camera in the edge cache (6 h), and sends it with `x-stale:
+  <seconds>` when Home Assistant errors, times out or answers with something that isn't an image.
+  A camera with no kept picture gets a real 502/504. On the frame, `App.refreshCamera` fetches the
+  picture as a blob and swaps it in only once it has arrived (the old code assigned `img.src`
+  directly, and the doorbell takeover loaded each picture twice, because `no-store` made the second
+  assignment a second request). The Home tab's age label shows the oldest picture's age. Why the
+  driveway camera sometimes can't deliver is not solved (it is Home Assistant's or the camera's).
+- **Media (1.11).** `playersView` finds every `media_player.*` in the states, merges duplicates by
+  friendly name (Cast + Assistant SDK + old TV entries), ranks by `MEDIA_RANK`, and hides
   unavailable ones. `loaded` marks an idle player with nothing to resume; Music Assistant returns
   HTTP 500 for play on such a player, so the buttons are disabled and the Worker answers 409.
-  The old single `home.media` setting (kitchen "now playing" card) was removed in the docs pass.
+  Artwork: `/api/ha/art` uses `entity_picture_local` (Home Assistant's own proxy) and never fetches
+  a LAN address: Music Assistant's `entity_picture` is `http://192.168.1.10:8095/...`, which
+  Cloudflare can't reach (it was a 403).
+- **Energy (1.10).** kWh today is integrated from `power` history (`wattHours`), hourly bars for
+  today (cached 15 min) and yesterday (cached for the day). The DCC smart meter's `usage` sensors
+  arrive hours late, so they're only used to say when the meter last reported.
+  **History API gotcha:** without `end_time`, `/api/history/period/<start>` returns one day from
+  `start`, not "until now". This once made a working smart meter look stuck for days.
 - **Frame health (1.6).** Frames heartbeat every 5 min into `frame:<id>`. Same-name entries quiet
   15 min are deduped (a frame gets a new id at a new address); entries expire after 30 days. The
-  cron sends one "offline" and one "back" notification per outage through `frames.notify`, with
-  the same tag so Android replaces the first.
+  cron sends one "offline" and one "back" notification per outage through `frames.notify`, with the
+  same tag so Android replaces the first.
 
 ## Google
 
 - **Drive times (1.7).** Routes API `computeRoutes`, `TRAFFIC_AWARE` (Pro SKU), origin from the
-  latitude/longitude of the person's HA `person.` entity, or `zone.home`. Only events with a location starting in
-  the next 4 h; each cached 10 min; over 3 h or no route falls back to `Travel:`. A Worker-side
-  budget of 300 calls a day (`DRIVE_DAILY_MAX`) protects the bill, because free trial accounts
-  can't set quotas in the console. `Walk:` minutes are added on top.
+  latitude/longitude of the person's Home Assistant `person.` entity, or `zone.home`. Only events
+  with a location starting in the next 4 h; each cached 10 min; over 3 h or no route falls back to
+  `Travel:`. A Worker-side budget of 300 calls a day (`DRIVE_DAILY_MAX`) protects the bill, because
+  free trial accounts can't set quotas in the console. `Walk:` minutes are added on top.
 - **Calendar write-back (1.8).** No OAuth user login: a service account signs an RS256 JWT with
   WebCrypto (`googleToken`), trades it for an access token, and writes to calendars shared with it
   ("Make changes to events"). Calendar ids are parsed from the iCal URLs. The event row keeps
   `gcal`/`gid`; `getCalendar` hides the local copy once the feed contains `<gid>@google.com`, so
-  nothing shows twice. Our Google Workspace org enforces `iam.disableServiceAccountKeyCreation`;
-  the project needed a policy override to make the key, then was set back to inherit.
+  nothing shows twice. Our Google Workspace organisation enforces
+  `iam.disableServiceAccountKeyCreation`; the project needed a policy override to make the key,
+  then was set back to inherit.
+
+## Screens, night and sleep (per frame)
+
+Everything here is kept **on the frame** (`localStorage`), set in the display controls, so each
+frame can differ. Keys: `hq-night` (Dim, Bright, Sleep, Wake, Sleep on/off), `hq-idle` (timeouts),
+`hq-muted` and `hq-volume`, `hq-frame-id` and `hq-frame-name`. The kiosk keeps its own
+`screenoff` mode (below).
+
+- **Night mode (1.17, 1.18).** Dim 22:00 to Bright 06:00 by default; Sleep 01:00 to Wake 05:00 off
+  by default. A window may cross midnight; from = to means never. Times are `"HH:MM"` (`App.night`).
+- **Timeouts (1.18).** Today 60 s, Rest 120 s, and Peek 20 s used instead of Rest during the night
+  hours, so a look at the time in bed doesn't keep the screen up (`App.idle`; 5-3600 s).
+- **The clock decides the resting screen** (`App.restMode`): screen off between Sleep and Wake if
+  switched on, the dim clock between Dim and Bright, otherwise the photo screen. It is applied when
+  the idle timer runs out (`App.rest`) and at the four boundaries for a frame resting untouched
+  (`App.syncNightMode`, every minute). A frame being used (the day mode) isn't interrupted; it rests
+  when it goes quiet. A tap wakes to Today whatever the screen was; the tap checks the clock for the
+  tint.
+- **The tint.** While it's night the whole dashboard is dimmed and amber (`data-night` on the stage,
+  a CSS filter on the rail and views), whatever the mode, tapped awake or not. Alerts aren't under
+  `.views`, so they're never dimmed. This replaced 1.17's 20 s "nightdash" mode.
+- **Modes dropdown.** Ambient = `App.rest()` (rest now, the clock still decides, and keeps switching
+  at the boundaries). Screen off = a manual pick (`App.setMode('off', true)`): it stays, whatever the
+  time, until a tap. The keyboard's **N** (night preview) was removed; **A** does the same as Ambient.
+- **Screen off, the page side.** A tap on the off layer is ignored for 1.5 s (a screen takes a second
+  to go dark; a bounce on the button that turned it off woke the PF1007L 1.2 s later). A page that
+  loads while the screen is asleep joins "off" (`info().screenOn`). `window.HomeHQScreenOn()` (called
+  by the kiosk when the screen comes on) wakes to Today.
 
 ## Kiosk app (`kiosk/`)
 
-- Built without Gradle (`build.sh`/`build.ps1`: javac, d8, aapt2, apksigner). 1.2 = versionCode 3.
-- 1.2 added the `window.HomeHQKiosk` bridge: `setScreenOff()` (window brightness 0, taps still
-  work) and `info()` (kiosk version, model, Android version, Wi-Fi RSSI; needs
-  `ACCESS_WIFI_STATE`).
+- Built without Gradle (`build.sh`/`build.ps1`: javac, d8, aapt2, apksigner). 1.2 = versionCode 3;
+  1.3 = 4, 1.3.1 = 5, 1.3.2 = 6, 1.3.3 = 7, 1.4 = 8.
+- **Bridge.** `window.HomeHQKiosk` (1.2): `setScreenOff(bool)` and `info()` (kiosk version, model,
+  Android version, Wi-Fi RSSI; 1.3 adds `sleep`, `screenoff` and `screenOn`). The kiosk calls
+  `window.HomeHQScreenOn()` in the page when the screen comes on.
+- **Screen off has three modes**, chosen once per frame with
+  `am start -n com.wesbos.homehq/.MainActivity --es screenoff <lock|backlight|dim|auto>`:
+  - **`lock` (1.3, the C-2).** The kiosk is a device admin with only `force-lock` (`ScreenAdmin`; enable
+    with `dpm set-active-admin com.wesbos.homehq/.ScreenAdmin`). `setScreenOff(true)` calls `lockNow()`,
+    the same as the power button, and holds a partial wake lock so the CPU and Wi-Fi keep running.
+    Measured on the C-2: `backlight(0)` in `/sys/class/disp/disp/attr/sys`, the page still checked in 3
+    minutes later while dark, and one tap woke it straight to Today. Window brightness 0 doesn't do
+    this: it only reaches the panel minimum (8/255 on the C-2, 10/255 on the PF1007L).
+  - **`backlight` (1.3.1-1.3.3, the PF1007L).** On the PF1007L the touch controller (gslX680) powers
+    down with the display and sent no events at all while asleep (recorded with `getevent`), so a
+    tap can't wake it. Instead the frame stays awake and the kiosk writes 0 to the Allwinner display
+    driver's `/sys/class/disp/disp/attr/lcdbl` (root-only; world-readable) through `su`. Three things
+    learned: this frame's Android 6 `su` takes `su 0 sh -c "..."` and rejects `-c` ("invalid uid/gid
+    '-c'"; 1.3.2 tries both forms); Android's auto-brightness pushed `lcdbl` back up whenever the
+    room light changed (0 -> 242, the panel lit for ~9 s with a 5 s re-apply loop), so while dark
+    the kiosk sets `screen_brightness_mode` to manual (`settings put system`), waits 0.4 s, writes
+    0, re-applies every 0.5 s as a backstop, and on wake writes the saved level then restores auto
+    (1.3.3); and a write that didn't take falls back to dimming rather than staying lit (1.3.1 did,
+    which is how the `su` problem showed). `autobright_off` records that auto-brightness is owed back,
+    so a kiosk killed while dark puts it right on the next start.
+  - `dim`: window brightness 0. `auto`: forget the choice (`lock` if the admin right is on, else `dim`).
+- **Wireless ADB (1.4).** A 5-minute window started from the display controls (`Bridge.setAdb`), the
+  same as `adb tcpip 5555` through `su` (`setprop service.adb.tcp.port 5555; stop adbd; start adbd`),
+  closed again with port `0`. Both frames run root ADB with `ro.adb.secure=0` (no key check), so it is
+  off by default, only started at the frame, and limited to 5 minutes. With a subnet saved (`--es
+  adbfrom 192.168.10.0/24`, validated as an IPv4 CIDR because it goes into a root command) the kiosk
+  first creates an `iptables` chain `homehq_adb` (accept the subnet, drop the rest, jumped to from
+  INPUT for tcp/5555) and an `ip6tables` DROP, and **fails closed**: if the rules can't be made, ADB
+  stays closed and `adbError` says so. The deadline is kept in prefs (`adbuntil`) and the timer on a
+  handler that outlives the activity; `recoverAdb` on start keeps a running window going after an
+  install restarts the kiosk, and closes one that has run out. `adbd` is only restarted on close if the
+  network port was on, so a USB session isn't dropped for nothing. The page shows the state, a
+  countdown and `adb connect <ip>:5555` (the kiosk reports `adbIp` from `WifiManager`), and hides the
+  section on kiosks without `adbLeft`. Not yet tried on the frames.
+- **Deploy scripts (private, `frames/`).** `deploy-usb.sh` (the old `deploy.sh`, with a guard that
+  refuses a network address) and `deploy-wifi.sh <address>`, a wrapper: it tests TCP 5555 first (a
+  refusal means the frame is reachable but ADB is off; a time-out means the network is blocking it),
+  `adb connect`s, exports `ADB_SERIAL` and `DEPLOY_WIFI`, runs the USB script's steps, and
+  disconnects on exit. The change log records which one ran.
 - **Saved URL:** the kiosk only saves a URL given by `--es url` (`scripts/set-kiosk-url.sh`).
-  Redirects are followed but not saved, so after the move to `homehq` each frame needed
-  re-pointing before the old Worker could be deleted.
-- **Updating a frame:** `frames/<frame>/build.sh` and `deploy.sh` (private, gitignored). Deploy
-  checks the fingerprint and signing cert, `adb install -r`, **`sync`**, restarts, and checks
-  `mResumedActivity` (Android 10 doesn't print `mCurrentFocus`). On 2026-10-19 the C-2 lost power
-  shortly after an install: the package list was saved but the APK wasn't, so it booted to a black
-  screen with no Home app. Hence the `sync` and the "leave it powered 30 s" message.
+  Redirects are followed but not saved, so after the move to `homehq` each frame needed re-pointing
+  before the old Worker could be deleted.
+- **Updating a frame:** `frames/<frame>/build.sh` and `deploy.sh` (private, gitignored). Deploy checks
+  the fingerprint and signing certificate, `adb install -r`, **`sync`**, restarts, checks
+  `mResumedActivity` (Android 10 doesn't print `mCurrentFocus`), and offers to enable the sleep right.
+  On 2026-10-19 the C-2 lost power shortly after an install: the package list was saved but the APK
+  wasn't, so it booted to a black screen with no Home app. Hence the `sync` and the "leave it
+  powered 30 s" message.
 - adb in scripts must read `/dev/null`, or it swallows the next line of stdin (the y/N answer).
-- PF1007L: `adbd` runs as root and `su -c` prints nothing, so use plain `cat`. It has no volume
-  buttons; media volume is set with `service call audio 3 i32 3 i32 <0-15> i32 0 s16 com.android.shell`.
-- C-2: re-pointing needs a USB-C cable that carries data and fits its recessed port. Never disable
-  the whole `com.waophoto.fota` package.
+- **PF1007L:** `adbd` runs as root; plain `cat` works for prefs. It has no volume buttons; media
+  volume is set with `service call audio 3 i32 3 i32 <0-15> i32 0 s16 com.android.shell`. USB drops
+  and returns once about 45 s after boot, and the power must come through the powered hub.
+- **C-2:** re-pointing needs a USB-C cable that carries data and fits its recessed port. Never
+  `pm disable` the whole `com.waophoto.fota` package (every activity crashes at boot).
+
+## Working on it
+
+- **`wrangler deploy` ships the working folder as it is, not the last commit.** On 2026-10-25 an
+  unexplained, uncommitted `refreshBlink` (re-trigger a Blink camera at most every 10 s on each look
+  at the doorbell camera) went out with three deploys before it was noticed. Run `git diff` before
+  deploying, and don't assume who made an uncommitted change. It was removed, with its README
+  paragraph and the `refresh` setting.
+- Local preview: `.claude/launch.json` "dashboard-local" (`wrangler dev`, port 8787, test key `dev`
+  from `.dev.vars`; `.claude` is gitignored). The local Worker has no Home Assistant.
+- `secrets.json` values may be used in commands for checks (curl against the live Worker, Home
+  Assistant, Google) but are never printed: read into a shell variable, mask, unset.
+- `pkill -f` or `ps | grep` patterns that also appear in the command line of the shell running them
+  kill that shell (exit 144). Write the pattern so it can't match itself, or kill by PID.
+- Scratch copies of Home Assistant data (the state list holds positions and camera tokens) belong
+  in a scratch folder and are deleted afterwards.
 
 ## Version history
 
-| Version | Commit | What changed |
-| --- | --- | --- |
-| kiosk 1.3.3 | — | `backlight` mode: Android's auto-brightness pushed lcdbl back up whenever the light changed (0 -> 242, lit ~9 s with the 5 s hold loop; measured by covering the sensor). While dark the kiosk now sets `screen_brightness_mode` to manual via su (`settings put system`), restores the level then auto on wake, holds at 0.5 s, and recovers both on the next start if killed while dark (`autobright_off` pref) |
-| kiosk 1.3.2 | — | `backlight` mode's su call: the PF1007L's Android 6 `su` takes `su 0 sh -c cmd` and rejects `-c` ("invalid uid/gid '-c'"), so 1.3.1's write failed and fell back to dimming (the safety check worked); now tries both forms |
-| 1.22.1 | — | Camera snapshots: the Worker keeps the last good picture and serves it when Home Assistant fails (HA's 10 s camera timeout caused a 500 every 20 s); the frame swaps pictures in only once loaded; media artwork uses `entity_picture_local` instead of an unreachable LAN address; doorbell `off` switch; `refreshBlink` removed |
-| 1.22 | — | Pushed alerts by WebSocket through an `AlertHub` Durable Object: instant, no polling, ~0 CPU while idle (the 1.16 long poll cost 20-22 ms CPU per request); a Durable Object binding and migration in `wrangler.jsonc`; old pages' `?since=` loop held for 20 s so they can't spin |
-| 1.21 | — | HA pushes the dashboard's states to `POST /api/ha-push` (`npm run ha-state`: a rest_command whose template builds the payload in HA, plus an automation on change + every minute); the Worker reads that from D1 (`ha-push`, ~21 KB, 1-3 ms) and falls back to its own `/api/states` read when the push is older than 150 s or a control happened since (`ha-dirty`). Profiled before: 60%+ of a 14-22 ms refresh was decoding and parsing 834 KB to keep 21 KB |
-| 1.20 | — | Worker CPU: HA read back to one `/api/states` (reduced + cached 8 s), finished `/api/home` cached 8 s, home poll 30 s in the day, discovery removed (1.13's per-entity reads cost 14-27 ms CPU per request against the free 10 ms; 100+ CPU-limit hits) |
-| 1.19.1 / kiosk 1.3.1 | — | PF1007L can't wake from a real sleep (its touchscreen powers down; no events while asleep), so kiosk 1.3.1 adds a per-frame `screenoff` mode: `backlight` writes 0 to `/sys/class/disp/disp/attr/lcdbl` via su and keeps the frame awake (touch works), restored on wake/pause/destroy and re-applied every 5 s; `lock`, `dim`, `auto`. Page ignores a tap on the off layer in the first 1.5 s (a bounce woke the PF1007L 1.2 s after the first sleep). C-2 stays on `lock` |
-| 1.19 / kiosk 1.3 | 2d9ec88 | Real screen sleep: kiosk 1.3 is a device admin with force-lock only (`ScreenAdmin`, enable with `dpm set-active-admin`); `setScreenOff(true)` calls `lockNow()` and holds a partial wake lock, `false` wakes it; ACTION_SCREEN_ON calls `HomeHQScreenOn()` in the page; a page loading while asleep joins "off"; no auto-reload while off. Measured on the C-2: sleep gives `backlight(0)` and the page still checks in; its minimum dim brightness is 8/255, PF1007L 10/255 |
-| 1.18 | 5665152 | Per-frame timeouts (`hq-idle`: Today 60 s, Rest 120 s, Peek 20 s in the night hours); night mode controls: Dim/Bright/Sleep/Wake times and a toggle; the dim amber tint now follows the night hours (`data-night` on the stage) instead of only the tap-the-clock state; Modes is a dropdown (Ambient, Screen off), refresh is an icon button, "Idle: fast" and the Night preview removed; Screen off picked by hand stays until a tap (`App.setMode('off', true)`); Ambient from the controls and the A key just call `App.rest()` (rest now, the clock still decides); tapping the night clock goes to Today like any wake (no more 20 s `nightdash` mode); the clock picks the resting screen only when idle runs out and at the four boundaries (`App.restMode`, `App.rest`, `App.syncNightMode`) |
-| 1.17.1 | — | Night/screen-off time boxes open the picker on a tap anywhere in the box (same `showPicker()` trick as the calendar's add dialog) |
-| 1.17 | — | Night and screen-off hours per frame, set in the display controls (`hq-night` in localStorage); frames now move between photo screen and night clock by themselves at the boundaries |
-| 1.16 | 875b4ef | Pushed alerts by long poll (fits the free plan); DEVLOG; README audit; dead `home.media` setting removed |
-| 1.15 | 1b413cb | Home Assistant pushes urgent alerts (`/api/alert`, 2 s alert poll, `npm run ha-alerts`) |
-| 1.14 | 596a69a | Sticky notes on frames and phone; push to the person's phone; migration 0003 |
-| 1.13 | 41dad00 | HA load cut by >95%: per-entity reads, 8 s edge snapshot, 5 min discovery, timeouts, back-off |
-| 1.12 / 1.12.1 | 0aa0e7a, 0a54964 | Home HQ wordmark top right (centred); presence sits on the rule |
-| 1.11 | 4b6b8f3 | Media tab for every player; kitchen card removed |
-| 1.10 | 8092d38 | Energy "today so far" panel; heating & water and climate summary removed; thermostat "Idle" |
-| 1.9 / 1.9.1 | ca6a4f9, dbae8b3 | Web Audio sounds with per-frame mute and volume; bins wording fix |
-| 1.8.1 – 1.8.3 | fcf09c7, 162bf84 | Add-event date/time pickers; 24 h calendar grid opening at 6 AM |
-| 1.8 | 476d07d | Frame events written to Google Calendar (service account); migration 0002 |
-| 1.7 | 50e99d7 | Live Google drive times for leave-by, `Walk:`, 300/day cap |
-| — | 3589960 | Worker renamed `home-hq` at homehq.sambartle.co.uk; `tools/moved` redirect (old Worker since deleted) |
-| — | d616ca2 | `settings.json` + `secrets.json` replace `family.json` + `calendars.json` |
-| 1.6 | 3002512 | Frame-offline phone notifications; tidier frame list |
-| 1.5 | f25f2a5 | Android share target for photos |
-| 1.4 / kiosk 1.2 | 2d41c0c | Screen off when away, all clear, frame health, auto-reload after deploy |
-| 1.3 – 1.3.2 | 5c40b5c, 51a79e0, 7249b83 | Chores removed; bins, leave countdown, Met Office warnings, energy line; test alerts dropdown |
-| 1.2 / 1.2.1 | effd15c, 5b19c69 | Version under Status; time preview removed; "HA connected" |
-| pre-1.2 | 7e4f916 … b94881a | Real data sources, phone page, smoke/CO takeover, per-calendar errors, `Travel:` parsing |
+Dates are 2026; the commit is the one the version shipped in (a commit can hold several versions).
+
+| Version | Commit | Date | What changed |
+| --- | --- | --- | --- |
+| 1.23 / kiosk 1.4 | — | 26 Oct | Wireless ADB: a 5-minute window from the display controls, limited to a saved subnet with firewall rules that fail closed; two deploy scripts per frame (USB and Wi-Fi) |
+| 1.22.1 | 75f706e | 25 Oct | Camera snapshots keep the last good picture and are swapped in only once loaded (Home Assistant's 10 s camera timeout caused a 500 every 20 s); media artwork via `entity_picture_local`; doorbell `off` switch; unexplained `refreshBlink` removed |
+| 1.22 | 9319129 | 25 Oct | Alerts over a WebSocket to the `AlertHub` Durable Object: instant, no polling, ~0 CPU idle (the 1.16 long poll cost 20-22 ms per call); old pages' `?since=` loop held for 20 s |
+| 1.21 | 9319129 | 25 Oct | Home Assistant pushes the dashboard's states to `POST /api/ha-push` (`npm run ha-state`); the Worker reads them from D1 and falls back to its own read when they are stale or a control happened (`ha-dirty`); Status shows "(pushed)" |
+| 1.20 | 9319129 | 25 Oct | Worker CPU: one `/api/states` read again (reduced, cached 8 s), the finished `/api/home` cached 8 s, home poll 30 s in the day, discovery removed |
+| kiosk 1.3.3 | d2e8152 | 24 Oct | `backlight` mode turns auto-brightness off while dark, holds at 0.5 s, recovers if killed |
+| kiosk 1.3.2 | d2e8152 | 24 Oct | `backlight` mode's `su` call: the PF1007L's `su` takes `su 0 sh -c`, not `-c` |
+| 1.19.1 / kiosk 1.3.1 | d2e8152 | 24 Oct | Per-frame `screenoff` mode (`lock`, `backlight`, `dim`, `auto`) because the PF1007L can't wake from a real sleep; page ignores a tap on the off layer in the first 1.5 s |
+| 1.19 / kiosk 1.3 | 2d9ec88 | 24 Oct | Real screen sleep: device admin with `force-lock`, `lockNow()` plus a wake lock, `HomeHQScreenOn()`, a page loading while asleep joins "off", no auto-reload while off |
+| 1.18 | 5665152 | 24 Oct | Per-frame night and screen-off times and timeouts; the tint follows the clock; Modes is a dropdown (Ambient = rest now, Screen off stays until a tap); refresh is an icon; no `nightdash`; "Idle: fast" and the Night preview removed |
+| 1.17.1 | 5665152 | 24 Oct | Night and screen-off time boxes open the picker anywhere in the box |
+| 1.17 | 5665152 | 24 Oct | Night and screen-off hours per frame in the display controls; frames switch between the photo screen and the night clock by themselves |
+| 1.16 | 875b4ef | 22 Oct | Pushed alerts by long poll (fits the free plan); this DEVLOG; README audit; dead `home.media` setting removed |
+| 1.15 | 1b413cb | 21 Oct | Home Assistant pushes urgent alerts (`/api/alert`, a 2 s counter poll, `npm run ha-alerts`) |
+| 1.14 | 596a69a | 21 Oct | Sticky notes on frames and phone; push to the person's phone; migration 0003 |
+| 1.13 | 41dad00 | 21 Oct | Home Assistant load cut by >95%: per-entity reads, 8 s edge snapshot, 5 min discovery, timeouts, back-off |
+| 1.12.1 / 1.12 | 0a54964, 0aa0e7a | 21 Oct | Home HQ wordmark top right (centred); presence sits on the rule |
+| 1.11 | 4b6b8f3 | 21 Oct | Media tab for every player; kitchen card removed |
+| 1.10 | 8092d38 | 21 Oct | Energy "today so far" panel; heating & water and climate summary removed; thermostat "Idle" |
+| 1.9.1 / 1.9 | dbae8b3, ca6a4f9 | 21 Oct | Web Audio sounds with per-frame mute and volume; bins wording fix |
+| 1.8.3 / 1.8.1 | 162bf84, fcf09c7 | 20 Oct | Add-event date and time pickers; 24 h calendar grid opening at 6 AM |
+| 1.8 | 476d07d | 20 Oct | Frame events written to Google Calendar (service account); migration 0002 |
+| 1.7 | 50e99d7 | 20 Oct | Live Google drive times for leave-by, `Walk:`, 300/day cap |
+| (rename) | 3589960 | 20 Oct | Worker renamed `home-hq` at homehq.sambartle.co.uk; `tools/moved` redirect (the old Worker is deleted) |
+| (config) | d616ca2 | 20 Oct | `settings.json` + `secrets.json` replace `family.json` + `calendars.json` |
+| 1.6 | 3002512 | 20 Oct | Frame-offline phone notifications; tidier frame list |
+| 1.5 | f25f2a5 | 19 Oct | Android share target for photos |
+| 1.4 / kiosk 1.2 | 2d41c0c | 19 Oct | Screen off when away, all clear, frame health, auto-reload after a deploy |
+| 1.3.2 / 1.3.1 / 1.3 | 7249b83, 51a79e0, 5c40b5c | 19 Oct | Chores removed; bins, leave countdown, Met Office warnings, energy line; test alerts dropdown |
+| 1.2.1 / 1.2 | 5b19c69, effd15c | 19 Oct | Version under Status; time preview removed; "HA connected" |
+| pre-1.2 | 7e4f916 ... b94881a | 16-19 Oct | Real data sources, phone page, smoke/CO takeover, per-calendar errors, `Travel:` parsing |
 
 ## Open items
 
-- Real doorbell test of pushed alerts (the `rest_command` test passed).
-- Second person's `notify` service and HA app location (for drive times and notes to their phone).
-- Energy `rate` and `standing` not set yet, so no cost estimate.
+- **Check the CPU counter** (Cloudflare, Workers & Pages, home-hq, Metrics) after a day or two with
+  both frames on; "Exceeded CPU Time Limits" should stay at zero.
+- Three "Uncaught Exception" events in the same chart have not been identified (Cloudflare's Logs,
+  filtered to errors, will name the path and message).
+- The driveway camera sometimes can't produce a snapshot within Home Assistant's 10 s (check Home
+  Assistant's log for `camera.driveway`, and what kind of camera it is).
+- The doorbell is **off** (`"off": true`): the new Blink doorbell doesn't ring in Home Assistant. Turn
+  it back on by deleting the word once there's a sensor that does; then re-run `npm run ha-alerts`.
+- Wireless ADB (kiosk 1.4) is built but not installed: install over USB, save `adbfrom` on each frame, and
+  try `deploy-wifi.sh`. Needs the router to let 192.168.10.0/24 reach the frames on TCP 5555; check that
+  `su` can run `iptables`, `ip6tables` and `stop adbd` on both frames.
+- Not yet watched on a real frame: the Sleep/Wake schedule, and an alert waking a dark frame.
+- Kiosk 1.3.3 isn't on the C-2 yet (it's on 1.3, `lock`, which works); the PF1007L is on 1.3.3
+  (`backlight`) and still has the unused device-admin right enabled (Android 6 has no
+  `dpm remove-active-admin`; deactivate under Settings, Security, Device administrators if wanted).
+- Second person's `notify` service and Home Assistant app location (for drive times and notes to their
+  phone).
+- Energy `rate` and `standing` aren't set, so there's no cost estimate.
 - Name the frames with `&frame=` once they have permanent homes.
-- Phones: reinstall the PWA from `homehq` so the share menu entry points at the new address.
+- Phones: reinstall the web app from `homehq` so the share menu entry points at the new address.
 - Add Christmas bin dates to `bins.moved` when Rotherham publishes the 2026/27 calendar.
+- Idea, not started: self-hosting the Worker (Node + SQLite + a folder for photos) would remove the
+  free plan's limits and let it reach Home Assistant on the LAN; about a day of adapter work.
