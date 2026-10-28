@@ -211,16 +211,22 @@ public class MainActivity extends Activity {
   // ------------------------------------------------------------ wireless ADB (a 5-minute window)
   // Both frames run root ADB with no key check (ro.adb.secure=0), so ADB on the network is an open root
   // shell for whoever can reach port 5555. It is therefore off by default, switched on only from the
-  // display controls (someone at the frame), for 5 minutes, and, when a subnet is saved
-  // (--es adbfrom 192.168.10.0/24), reachable only from that subnet: the firewall rules go in first, and
-  // if they can't be made it stays closed. It's the same as `adb tcpip 5555` (service.adb.tcp.port,
-  // restart adbd), done through su; the property is volatile, so a reboot closes it too.
-  private final Handler adbHandler = new Handler(Looper.getMainLooper()); // not cleared in onDestroy: the timer must outlive the activity
+  // display controls (someone at the frame), for 5 minutes, and only with a subnet saved
+  // (--es adbfrom 192.168.10.0/24): it is reachable only from that subnet, the firewall rules go in
+  // first, and if they can't be made it stays closed. With no subnet saved it refuses to start; opening
+  // it to the whole network has to be asked for (--es adbfrom any). It's the same as `adb tcpip 5555`
+  // (service.adb.tcp.port, restart adbd), done through su; the property is volatile, so a reboot closes it too.
+  // Static, so one timer is shared by every instance of the activity: a recreated activity can't leave
+  // an old callback behind to close a newer window early, and the timer outlives the activity.
+  private static final Handler ADB_HANDLER = new Handler(Looper.getMainLooper());
+  private static Runnable adbOffTask;
   private String adbError = "";
-  private final Runnable adbOff = new Runnable() {
-    @Override
-    public void run() { stopAdb(); }
-  };
+
+  private static void armAdbOff(final Context app, long ms) {
+    if (adbOffTask != null) ADB_HANDLER.removeCallbacks(adbOffTask);
+    adbOffTask = () -> stopAdbNow(app);
+    ADB_HANDLER.postDelayed(adbOffTask, ms);
+  }
 
   private static final java.util.regex.Pattern CIDR = java.util.regex.Pattern.compile("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})$");
 
@@ -232,18 +238,19 @@ public class MainActivity extends Activity {
     return Integer.parseInt(m.group(5)) <= 32;
   }
 
+  /** The saved subnet, "any" (open to the network, asked for explicitly), or "" (none saved: it won't start). */
   private String adbFrom() {
     String f = getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_ADB_FROM, "");
-    return validCidr(f) ? f : "";
+    return f.equals("any") || validCidr(f) ? f : "";
   }
 
-  /** "--es adbfrom 192.168.10.0/24" saves the allowed subnet; "none" clears it (open to the network). */
+  /** "--es adbfrom 192.168.10.0/24" saves the allowed subnet; "any" allows the whole network; "none" clears it. */
   private void applyAdbFromFlag(Intent intent) {
     String f = intent == null ? null : intent.getStringExtra(PREF_ADB_FROM);
     if (f == null) return;
     SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
     if (f.equals("none")) e.remove(PREF_ADB_FROM);
-    else if (validCidr(f)) e.putString(PREF_ADB_FROM, f);
+    else if (f.equals("any") || validCidr(f)) e.putString(PREF_ADB_FROM, f);
     else { Log.w(TAG, "Ignoring bad adbfrom"); return; }
     e.apply();
     Log.i(TAG, "Wireless ADB subnet " + f);
@@ -281,9 +288,13 @@ public class MainActivity extends Activity {
   private void startAdb() {
     final String from = adbFrom();
     adbError = "";
+    if (from.isEmpty()) {
+      adbError = "no subnet saved: over USB, adb shell am start -n com.wesbos.homehq/.MainActivity --es adbfrom <your computer's subnet>";
+      return;
+    }
     new Thread(() -> {
       boolean ok = true;
-      if (!from.isEmpty()) {
+      if (!from.equals("any")) {
         // Only that subnet may reach the port, everything else is dropped; IPv6 can't be matched by
         // subnet here, so it's blocked outright. No rules, no ADB.
         ok = su("iptables -N " + ADB_CHAIN + " 2>/dev/null; iptables -F " + ADB_CHAIN
@@ -300,25 +311,27 @@ public class MainActivity extends Activity {
       if (ok) {
         long until = System.currentTimeMillis() + ADB_WINDOW_MS;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong(PREF_ADB_UNTIL, until).apply();
-        adbHandler.removeCallbacks(adbOff);
-        adbHandler.postDelayed(adbOff, ADB_WINDOW_MS);
-        Log.i(TAG, "Wireless ADB on for 5 minutes" + (from.isEmpty() ? " (open to the network)" : ", from " + from));
+        armAdbOff(getApplicationContext(), ADB_WINDOW_MS);
+        Log.i(TAG, "Wireless ADB on for 5 minutes" + (from.equals("any") ? " (open to the network)" : ", from " + from));
       } else {
         closeAdb();
       }
     }).start();
   }
 
-  private void stopAdb() {
-    adbHandler.removeCallbacks(adbOff);
-    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_ADB_UNTIL).apply();
-    new Thread(this::closeAdb).start();
+  private void stopAdb() { stopAdbNow(getApplicationContext()); }
+
+  private static void stopAdbNow(Context app) {
+    if (adbOffTask != null) ADB_HANDLER.removeCallbacks(adbOffTask);
+    adbOffTask = null;
+    app.getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_ADB_UNTIL).apply();
+    new Thread(MainActivity::closeAdb).start();
     Log.i(TAG, "Wireless ADB off");
   }
 
   /** Close the port and remove our firewall rules. adbd is only restarted if the network port was on, so
    *  a USB session isn't dropped for nothing. */
-  private void closeAdb() {
+  private static void closeAdb() {
     boolean wasOn = getprop("service.adb.tcp.port").equals("5555");
     su((wasOn ? "setprop service.adb.tcp.port 0; stop adbd; start adbd; " : "")
         + "iptables -D INPUT -p tcp --dport 5555 -j " + ADB_CHAIN + " 2>/dev/null; iptables -F " + ADB_CHAIN + " 2>/dev/null;"
@@ -333,8 +346,7 @@ public class MainActivity extends Activity {
       boolean open = getprop("service.adb.tcp.port").equals("5555");
       long left = until - System.currentTimeMillis();
       if (open && left > 0) {
-        adbHandler.removeCallbacks(adbOff);
-        adbHandler.postDelayed(adbOff, left);
+        armAdbOff(getApplicationContext(), left);
       } else if (open || until != 0) {
         stopAdb();
       }
@@ -380,6 +392,7 @@ public class MainActivity extends Activity {
     Log.i(TAG, "Screen off mode " + m);
   }
 
+  private boolean darkWanted;  // the page asked for screen off (backlight route) and hasn't asked for it back
   private int lcdblSaved = -1; // level before going dark
   private boolean dark;        // backlight route: held at 0 now
   static final String PREF_AUTO_OFF = "autobright_off"; // we turned auto-brightness off and owe it back
@@ -489,6 +502,7 @@ public class MainActivity extends Activity {
     String mode = screenMode();
     if (off) {
       if (mode.equals("backlight")) {
+        darkWanted = true;
         goDark();
         return;
       }
@@ -508,6 +522,7 @@ public class MainActivity extends Activity {
       setBrightnessOff(true);
       return;
     }
+    darkWanted = false;
     restoreBacklight();
     setBrightnessOff(false);
     if (keepAwake != null && keepAwake.isHeld()) keepAwake.release();
@@ -635,6 +650,9 @@ public class MainActivity extends Activity {
   @Override
   protected void onResume() {
     super.onResume();
+    // onPause lights the panel so leaving the dashboard never strands it dark; if the page still wants
+    // the screen off (a brief pause: a dialog, an overlay), put it back.
+    if (darkWanted && screenMode().equals("backlight") && !dark) goDark();
     NavigationService.setDashboardVisible(true);
   }
 

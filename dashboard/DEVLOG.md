@@ -282,7 +282,7 @@ frame can differ. Keys: `hq-night` (Dim, Bright, Sleep, Wake, Sleep on/off), `hq
 ## Kiosk app (`kiosk/`)
 
 - Built without Gradle (`build.sh`/`build.ps1`: javac, d8, aapt2, apksigner). 1.2 = versionCode 3;
-  1.3 = 4, 1.3.1 = 5, 1.3.2 = 6, 1.3.3 = 7, 1.4 = 8.
+  1.3 = 4, 1.3.1 = 5, 1.3.2 = 6, 1.3.3 = 7, 1.4 = 8, 1.4.1 = 9.
 - **Bridge.** `window.HomeHQKiosk` (1.2): `setScreenOff(bool)` and `info()` (kiosk version, model,
   Android version, Wi-Fi RSSI; 1.3 adds `sleep`, `screenoff` and `screenOn`). The kiosk calls
   `window.HomeHQScreenOn()` in the page when the screen comes on.
@@ -310,12 +310,14 @@ frame can differ. Keys: `hq-night` (Dim, Bright, Sleep, Wake, Sleep on/off), `hq
 - **Wireless ADB (1.4).** A 5-minute window started from the display controls (`Bridge.setAdb`), the
   same as `adb tcpip 5555` through `su` (`setprop service.adb.tcp.port 5555; stop adbd; start adbd`),
   closed again with port `0`. Both frames run root ADB with `ro.adb.secure=0` (no key check), so it is
-  off by default, only started at the frame, and limited to 5 minutes. With a subnet saved (`--es
-  adbfrom 192.168.10.0/24`, validated as an IPv4 CIDR because it goes into a root command) the kiosk
-  first creates an `iptables` chain `homehq_adb` (accept the subnet, drop the rest, jumped to from
+  off by default, only started at the frame, and limited to 5 minutes. **From 1.4.1 it refuses to start
+  until a subnet is saved** (`--es adbfrom 192.168.10.0/24`, validated as an IPv4 CIDR because it goes into
+  a root command; `any` opens it to the network on purpose, `none` removes the value); 1.4 opened to the
+  whole network without one. With the subnet saved the kiosk first creates an `iptables` chain `homehq_adb` (accept the subnet, drop the rest, jumped to from
   INPUT for tcp/5555) and an `ip6tables` DROP, and **fails closed**: if the rules can't be made, ADB
-  stays closed and `adbError` says so. The deadline is kept in prefs (`adbuntil`) and the timer on a
-  handler that outlives the activity; `recoverAdb` on start keeps a running window going after an
+  stays closed and `adbError` says so. The deadline is kept in prefs (`adbuntil`) and the timer is static,
+  one shared `Handler` and task (an instance field let a recreated activity leave an old callback that
+  closed a newer window early); `recoverAdb` on start keeps a running window going after an
   install restarts the kiosk, and closes one that has run out. `adbd` is only restarted on close if the
   network port was on, so a USB session isn't dropped for nothing. The page shows the state, a
   countdown and `adb connect <ip>:5555` (the kiosk reports `adbIp` from `WifiManager`), and hides the
@@ -346,6 +348,33 @@ frame can differ. Keys: `hq-night` (Dim, Bright, Sleep, Wake, Sleep on/off), `hq
 
 ## Working on it
 
+- **Code review, 2026-10-28** (the changes since 1.15; ten findings, nine fixed in 1.23.1 / kiosk 1.4.1,
+  each checked against the code first, and each fix tested, the Worker ones against the old code too):
+  - **Alert socket:** a connection with no pong for 75 s was only `close()`d, and the close handshake can
+    take very long on a half-open connection, keeping the fallback poll off while doorbell, smoke and leak
+    pushes were missed. It is now dropped and reconnected at once.
+  - **`ha-dirty` was stamped after the control returned,** so the push that control triggers (which can
+    arrive first) was judged stale and forced full 800 KB reads for up to a minute. It is now stamped before
+    (`forgetSnapshot`), and only the edge copies are dropped after (`dropSnapshots`). Test: a push arriving
+    during the control is served from the push; the old code did a full read.
+  - **Wireless ADB refuses to start without a saved subnet** (see Kiosk app).
+  - **The ADB section re-rendered every second,** replacing the button under a finger, so some taps were lost;
+    now only the countdown text changes while the state is the same.
+  - **`refreshCamera`:** one refresh at a time per picture (a request can take 8 s while the doorbell asks every
+    2 s, so an older answer could land on a newer one), the new picture is preloaded and only swapped in if it
+    loads, blob URLs are released (on error, when replaced, and when the takeover closes).
+  - **The camera "now" label** said "now" while a refresh was still failing; it now counts up until a round
+    succeeds. The fix first broke the 20 s refresh (resetting the counter whenever the view re-rendered, which it
+    does often); the browser test caught that.
+  - **Backlight mode:** a brief pause (`onPause` lights the panel) left the panel lit while the page still
+    showed "off"; `darkWanted` re-darkens it on resume.
+  - **Artwork:** an absolute address is fetched only if it is `https`, within 8 s, and only an `image/*` answer
+    is passed on, with `nosniff` and a sandboxing CSP (also on camera pictures); the old LAN deny-list missed
+    cases and wrongly blocked hosts starting `10.`.
+  - **Not fixed:** `expand()` in the `ha-state` template replaces a group or light group with its members, so
+    a configured group entity would never be pushed. It doesn't affect these entities (their pushed payload
+    returned each as itself) and can't be tested without Home Assistant; revisit if a group is ever added.
+
 - **`wrangler deploy` ships the working folder as it is, not the last commit.** On 2026-10-25 an
   unexplained, uncommitted `refreshBlink` (re-trigger a Blink camera at most every 10 s on each look
   at the doorbell camera) went out with three deploys before it was noticed. Run `git diff` before
@@ -366,6 +395,7 @@ Dates are 2026; the commit is the one the version shipped in (a commit can hold 
 
 | Version | Commit | Date | What changed |
 | --- | --- | --- | --- |
+| 1.23.1 / kiosk 1.4.1 | — | 28 Oct | Code review fixes: wireless ADB refuses without a subnet; the alert socket reconnects at once when it stops answering; `ha-dirty` stamped before a control; camera refreshes one at a time and preloaded; ADB section stops losing taps; backlight re-darkens on resume; ADB timer static; artwork https-only and image-only |
 | 1.23 / kiosk 1.4 | 96017a3 | 26 Oct | Wireless ADB: a 5-minute window from the display controls, limited to a saved subnet with firewall rules that fail closed; two deploy scripts per frame (USB and Wi-Fi) |
 | 1.22.1 | 75f706e | 25 Oct | Camera snapshots keep the last good picture and are swapped in only once loaded (Home Assistant's 10 s camera timeout caused a 500 every 20 s); media artwork via `entity_picture_local`; doorbell `off` switch; unexplained `refreshBlink` removed |
 | 1.22 | 9319129 | 25 Oct | Alerts over a WebSocket to the `AlertHub` Durable Object: instant, no polling, ~0 CPU idle (the 1.16 long poll cost 20-22 ms per call); old pages' `?since=` loop held for 20 s |
@@ -408,6 +438,8 @@ Dates are 2026; the commit is the one the version shipped in (a commit can hold 
   Assistant's log for `camera.driveway`, and what kind of camera it is).
 - The doorbell is **off** (`"off": true`): the new Blink doorbell doesn't ring in Home Assistant. Turn
   it back on by deleting the word once there's a sensor that does; then re-run `npm run ha-alerts`.
+- Kiosk 1.4.1 (the review fixes) is built but not on the frames: install it over Wi-Fi with `deploy-wifi.sh`,
+  which is also a test of the new rule that a subnet must be saved.
 - Wireless ADB (kiosk 1.4) works on both frames, with the subnet lock (`adbfrom`) saved on both: read back
   over USB on the PF1007L; on the C-2 it was saved by the owner afterwards (the first Wi-Fi install there ran
   with the 5-minute window open to the whole guest Wi-Fi) and has not been read back.

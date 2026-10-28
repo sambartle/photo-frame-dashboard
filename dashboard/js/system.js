@@ -3,24 +3,43 @@
   'use strict';
   var D = window.DATA, $ = App.$;
 
-  // Refresh a camera picture in place: fetch the new one, and swap it in only once it has arrived, so
-  // a slow or failed refresh (Home Assistant answers a sleeping camera with a 500 after 10 s) leaves
-  // the old picture up instead of a broken-image icon. done(seconds) says how old the picture the
-  // Worker sent is (0 = fresh; it sends the last good one when Home Assistant fails).
+  // Refresh a camera picture in place: fetch the new one, check it loads, and only then swap it in, so
+  // a slow or failed refresh (Home Assistant answers a sleeping camera with a 500 after 10 s) or a bad
+  // picture leaves the old one up instead of a broken-image icon. done(seconds) is called only when a
+  // picture was swapped in, with how old it is (0 = fresh; the Worker sends the last good one when Home
+  // Assistant fails). One refresh at a time per picture: a request can take up to 8 s while the doorbell
+  // asks every 2 s, and an older answer must never land on top of a newer one.
   App.refreshCamera = function (img, id, done) {
     if (!window.fetch || !window.URL || !URL.createObjectURL) { img.src = App.cameraSrc(id); return; }
+    if (img._busy) return;
+    img._busy = true;
+    var url = null;
+    function finish(keep) { if (url && !keep) URL.revokeObjectURL(url); img._busy = false; }
     fetch(App.cameraSrc(id), { credentials: 'same-origin' }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       var stale = +r.headers.get('x-stale') || 0;
       return r.blob().then(function (b) { return { b: b, stale: stale }; });
     }).then(function (x) {
-      if (!img.isConnected) return;
-      var before = img.getAttribute('data-blob'), url = URL.createObjectURL(x.b);
-      img.onload = function () { if (before) URL.revokeObjectURL(before); };
-      img.setAttribute('data-blob', url);
-      img.src = url;
-      if (done) done(x.stale);
-    }, function () {});
+      if (!img.isConnected) { finish(false); return; }
+      url = URL.createObjectURL(x.b);
+      var probe = new Image();
+      probe.onload = function () {
+        if (!img.isConnected) { finish(false); return; }
+        var before = img.getAttribute('data-blob');
+        img.setAttribute('data-blob', url);
+        img.src = url;
+        if (before) URL.revokeObjectURL(before);
+        finish(true);
+        if (done) done(x.stale);
+      };
+      probe.onerror = function () { finish(false); };
+      probe.src = url;
+    }, function () { finish(false); });
+  };
+  // Let go of a picture's memory (a takeover closing: the picture is never shown again).
+  App.releaseCamera = function (img) {
+    var u = img && img.getAttribute('data-blob');
+    if (u) { URL.revokeObjectURL(u); img.removeAttribute('data-blob'); }
   };
   App.cameraSrc = function (id) { return '/api/ha/camera?id=' + encodeURIComponent(id) + '&t=' + Date.now(); };
 
@@ -39,6 +58,7 @@
     clearInterval(camTimer);
     App.stopAlarm();
     var el = $('#takeover');
+    App.releaseCamera(el.querySelector('.tk-cam img'));
     el.classList.remove('is-open');
     el.innerHTML = '';
   }
@@ -232,14 +252,25 @@
     var el = $('#demoAdb'), k = App.kiosk();
     if (!el) return;
     if (!k || k.adbLeft === undefined) { el.innerHTML = ''; return; }
-    var left = k.adbLeft, on = left > 0;
+    var left = k.adbLeft, on = left > 0, clock = on ? Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2) : 'Off';
+    // Rewriting the section every second replaced the button under a finger and lost the tap: only the
+    // countdown text changes while the state is the same.
+    var key = [on, k.adbFrom, k.adbIp, k.adbError].join('|');
+    if (el.getAttribute('data-k') === key) { var c = el.querySelector('.demo-vol'); if (c) c.textContent = clock; return; }
+    el.setAttribute('data-k', key);
+    var from = k.adbFrom, err = k.adbError ? '<p class="demo-note" style="color:#FF8A80">' + App.esc(k.adbError) + '</p>' : '';
+    if (!from) {
+      // The kiosk won't start it without a subnet saved, so there's nothing to press.
+      el.innerHTML = '<div class="label label--light">Wireless ADB</div>' +
+        '<p class="demo-note">Needs a subnet saved first, over USB: <b>adb shell am start -n com.wesbos.homehq/.MainActivity --es adbfrom &lt;your computer’s subnet&gt;</b></p>' + err;
+      return;
+    }
     el.innerHTML = '<div class="label label--light">Wireless ADB</div>' +
       '<div class="demo-sound"><button data-adb class="' + (on ? 'is-on' : '') + '">' + (on ? 'Turn off' : 'Turn on for 5 min') + '</button>' +
-      '<span class="demo-vol num">' + (on ? Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2) : 'Off') + '</span></div>' +
+      '<span class="demo-vol num">' + clock + '</span></div>' +
       '<p class="demo-note">' + (on
-        ? 'adb connect ' + App.esc(k.adbIp || '<this frame’s address>') + ':5555 · ' + (k.adbFrom ? 'only from ' + App.esc(k.adbFrom) : '<b>open to this whole Wi-Fi</b>')
-        : 'For deploying an update over Wi-Fi. Switches itself off after 5 minutes. ' + (k.adbFrom ? 'Only ' + App.esc(k.adbFrom) + ' can connect.' : 'No address lock is set: anyone on this Wi-Fi could connect while it’s on.')) + '</p>' +
-      (k.adbError ? '<p class="demo-note" style="color:#FF8A80">' + App.esc(k.adbError) + '</p>' : '');
+        ? 'adb connect ' + App.esc(k.adbIp || '<this frame’s address>') + ':5555 · ' + (from === 'any' ? '<b>open to this whole Wi-Fi</b>' : 'only from ' + App.esc(from))
+        : 'For deploying an update over Wi-Fi. Switches itself off after 5 minutes. ' + (from === 'any' ? 'No address lock: anyone on this Wi-Fi could connect while it’s on.' : 'Only ' + App.esc(from) + ' can connect.')) + '</p>' + err;
   }
   App.openDemo = function () {
     var el = $('#demo');

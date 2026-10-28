@@ -697,13 +697,19 @@ async function edgeCache(key, ttl, compute) {
   await caches.default.put(req, new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json', 'cache-control': 'max-age=' + ttl } }));
   return value;
 }
-// Something was just controlled (or an alert fired): drop this location's shared copies, and mark the
-// pushed state out of date until Home Assistant's next push, so the next reads go to Home Assistant
-// itself and show the change at once.
+// Something is about to be controlled (or an alert fired): drop this location's shared copies, and mark
+// the pushed state out of date until Home Assistant's next push, so the next reads go to Home Assistant
+// itself and show the change at once. Call this BEFORE the control, not after: Home Assistant pushes the
+// new state moments after it acts, possibly before the Worker's call to it returns, and a push is only
+// accepted if it's newer than this mark. After the control, dropSnapshots() clears anything a read
+// meanwhile put back, without touching the mark.
 function forgetSnapshot(env) {
-  const drop = ['ha-snap', 'home-view'].map((k) => caches.default.delete(new Request('https://cache.homehq.internal/' + k)));
+  const drop = [dropSnapshots()];
   if (env) drop.push(putCache(env, 'ha-dirty', { at: Date.now() }, DAY_MS));
   return Promise.all(drop).catch(() => {});
+}
+function dropSnapshots() {
+  return Promise.all(['ha-snap', 'home-view'].map((k) => caches.default.delete(new Request('https://cache.homehq.internal/' + k)))).catch(() => {});
 }
 function coreIds() {
   const H = CFG.home, al = CFG.alerts, E = H.energy || {}, ids = new Set(['zone.home']);
@@ -894,6 +900,7 @@ const MEDIA_DO = {
 async function mediaControl(env, id, b) {
   const op = MEDIA_DO[b.do];
   if (!op || !mediaAllowed(CFG.home, id)) return bad('unknown player or action', 404);
+  await forgetSnapshot(env);
   try {
     await haService(env, 'media_player', op[0], Object.assign({ entity_id: id }, op[1] ? op[1](b.value) : {}));
   } catch (err) {
@@ -903,7 +910,7 @@ async function mediaControl(env, id, b) {
     const why = /^(play_pause|next|previous)$/.test(b.do) ? 'nothing to play or resume' : 'it didn’t accept that';
     return bad(name + ': ' + why, 409);
   }
-  await forgetSnapshot(env);
+  await dropSnapshots();
   return json({ ok: true });
 }
 
@@ -1016,6 +1023,7 @@ async function controlDevice(env, entity, p) {
   const d = CFG.devices.find((x) => x.entity === entity) || (CFG.alerts.doorbell && CFG.alerts.doorbell.lock === entity ? { entity } : null);
   if (!d) return bad('unknown device', 404);
   const domain = entity.split('.')[0], target = { entity_id: entity };
+  await forgetSnapshot(env);
   if (domain === 'lock' && 'locked' in p) await haService(env, 'lock', p.locked ? 'lock' : 'unlock', target);
   else if (domain === 'cover' && 'state' in p) await haService(env, 'cover', p.state === 'open' || p.state === 'opening' ? 'open_cover' : 'close_cover', target);
   else if (domain === 'cover' && 'pos' in p) {
@@ -1028,13 +1036,14 @@ async function controlDevice(env, entity, p) {
     else if (domain === 'light' && p.level) await haService(env, 'light', 'turn_on', Object.assign({ brightness_pct: Math.max(1, Math.min(100, Math.round(+p.level))) }, target));
     else await haService(env, domain, 'turn_on', target);
   } else return bad('nothing to change');
-  await forgetSnapshot(env);
+  await dropSnapshots();
   return json({ ok: true });
 }
 
 async function homeAction(env, what, b) {
+  await forgetSnapshot(env);
   const res = await homeActionRun(env, what, b);
-  if (res.ok) await forgetSnapshot(env);
+  if (res.ok) await dropSnapshots();
   return res;
 }
 async function homeActionRun(env, what, b) {
@@ -1064,7 +1073,7 @@ async function cameraImage(env, id) {
     const hit = await caches.default.match(key);
     if (!hit) return null;
     const saved = +hit.headers.get('x-saved') || Date.now();
-    return new Response(hit.body, { headers: { 'content-type': hit.headers.get('content-type') || 'image/jpeg', 'cache-control': 'no-store', 'x-stale': String(Math.round((Date.now() - saved) / 1000)) } });
+    return new Response(hit.body, { headers: Object.assign(IMAGE_HEADERS(hit.headers.get('content-type') || 'image/jpeg'), { 'x-stale': String(Math.round((Date.now() - saved) / 1000)) }) });
   };
   try {
     const res = await ha(env, '/api/camera_proxy/' + id, { headers: { 'content-type': '' }, signal: AbortSignal.timeout(8e3) });
@@ -1072,7 +1081,7 @@ async function cameraImage(env, id) {
     if (res.ok && /^image\//.test(type)) {
       const buf = await res.arrayBuffer();
       await caches.default.put(key, new Response(buf, { headers: { 'content-type': type, 'x-saved': String(Date.now()), 'cache-control': 'max-age=' + CAM_KEEP_S } })).catch(() => {});
-      return new Response(buf, { headers: { 'content-type': type, 'cache-control': 'no-store' } });
+      return new Response(buf, { headers: IMAGE_HEADERS(type) });
     }
     if (res.body) res.body.cancel().catch(() => {});
     return (await old()) || bad('Home Assistant: camera HTTP ' + res.status, 502);
@@ -1080,8 +1089,18 @@ async function cameraImage(env, id) {
     return (await old()) || bad('camera unavailable', 504);
   }
 }
-// Addresses only inside the house, which the Worker can't reach from Cloudflare.
-const LAN_URL = /^https?:\/\/(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|[^/]*\.local[:/])/i;
+// Pictures fetched for the frame come back as plain images only: whatever the source claims, it is
+// passed on as an image type with nosniff and a sandboxing CSP, so even a page at that address can't
+// run under the dashboard's origin.
+const IMAGE_HEADERS = (type) => ({ 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
+async function imageResponse(res) {
+  const type = res.headers.get('content-type') || '';
+  if (!res.ok || !/^image\/[a-z0-9.+-]+$/i.test(type.split(';')[0].trim())) {
+    if (res.body) res.body.cancel().catch(() => {});
+    return new Response(null, { status: 404 });
+  }
+  return new Response(res.body, { status: 200, headers: IMAGE_HEADERS(type.split(';')[0].trim()) });
+}
 async function haImage(env, which, url) {
   if (which === 'camera') {
     const id = url.searchParams.get('id');
@@ -1097,12 +1116,15 @@ async function haImage(env, which, url) {
   // same picture through itself as entity_picture_local, which the Worker can reach.
   const pic = a.entity_picture_local || a.entity_picture;
   if (!pic) return new Response(null, { status: 404 });
-  if (/^https?:/.test(pic)) {
-    if (LAN_URL.test(pic)) return new Response(null, { status: 404 });
-    return fetch(pic);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(pic)) {
+    // An absolute address: https only (a LAN or plain-http address can't be reached from Cloudflare, and
+    // isn't worth the risk), with a time limit.
+    let u;
+    try { u = new URL(pic); } catch (e) { return new Response(null, { status: 404 }); }
+    if (u.protocol !== 'https:') return new Response(null, { status: 404 });
+    return imageResponse(await fetch(u.href, { signal: AbortSignal.timeout(8e3) }).catch(() => new Response(null, { status: 502 })));
   }
-  const res = await ha(env, pic, { headers: { 'content-type': '' } });
-  return new Response(res.body, { status: res.status, headers: { 'content-type': res.headers.get('content-type') || 'image/jpeg', 'cache-control': 'no-store' } });
+  return imageResponse(await ha(env, pic, { headers: { 'content-type': '' } }));
 }
 
 // ------------------------------------------------------------------ photos

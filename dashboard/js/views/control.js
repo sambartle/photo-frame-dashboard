@@ -336,14 +336,20 @@
   // Count up since the last snapshot and fetch fresh ones every 20 s while this view is open.
   function camTimer() {
     clearInterval(V.camTimer);
+    V.camTick = V.camTick || 0; // kept across re-renders, which restart this timer: resetting it here would stop the 20 s from ever arriving
     V.camTimer = setInterval(function () {
       V.camAge++;
-      if (V.camAge >= 20) {
-        // The label says how old the oldest picture is: 0 once they've all refreshed, more if the
-        // Worker had to send one it kept (Home Assistant couldn't get a new one from that camera).
-        V.camAge = 0;
-        App.$$('.cam', V.el).forEach(function (b) {
-          App.refreshCamera(b.querySelector('img'), b.dataset.cam, function (stale) { V.camAge = Math.max(V.camAge, stale); });
+      // Every 20 s try to refresh every picture. The label counts seconds since the last time they all
+      // refreshed (and says more if the Worker had to send one it kept): a refresh that fails leaves it
+      // counting, instead of saying "now" over an old picture.
+      if (++V.camTick >= 20) {
+        V.camTick = 0;
+        var cams = App.$$('.cam', V.el), left = cams.length, worst = 0;
+        cams.forEach(function (b) {
+          App.refreshCamera(b.querySelector('img'), b.dataset.cam, function (stale) {
+            worst = Math.max(worst, stale);
+            if (--left === 0) V.camAge = worst;
+          });
         });
       }
       App.$$('.cam-age', V.el).forEach(function (a) { a.textContent = V.camAge ? V.camAge + 's ago' : 'now'; });

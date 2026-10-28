@@ -102,15 +102,17 @@ by the kiosk and survives the restart that an install causes.
 
 **Be careful: these frames run root ADB with no key check (`ro.adb.secure=0`),** so while it's on, anyone
 who can reach port 5555 has a root shell. That's why it's off by default, only started by someone at the
-frame, and limited to 5 minutes. Save the subnet your computer is on, once per frame over USB:
+frame, limited to 5 minutes, and **it won't start at all until a subnet is saved** (1.4.1; 1.4 would open to
+the whole network). Save the subnet your computer is on, once per frame over USB:
 
 ```sh
 adb shell am start -n com.wesbos.homehq/.MainActivity --es adbfrom 192.168.10.0/24    # none removes it
 ```
 
-With a subnet saved, the kiosk first adds firewall rules (an `iptables` chain `homehq_adb`: accept that
+With the subnet saved, the kiosk first adds firewall rules (an `iptables` chain `homehq_adb`: accept that
 subnet on port 5555, drop the rest; IPv6 is blocked outright) and **leaves ADB closed if it can't make
-them**. Without one it opens to the whole Wi-Fi, and the control says so. The subnet has to be able to
+them**. To open it to the whole Wi-Fi on purpose, save `any` instead of a subnet (`--es adbfrom any`); the
+control then says so. `none` removes the saved value, after which it won't start. The subnet has to be able to
 reach the frame (a router or firewall rule, and not a guest network that isolates its clients).
 
 Then, with the frame's address from the control:

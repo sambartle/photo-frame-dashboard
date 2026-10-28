@@ -389,7 +389,7 @@ To set it up, once:
 The kiosk app (not the dashboard, which a deploy updates by itself) can be updated without the USB
 cable: in the display controls, **Wireless ADB**, **Turn on for 5 min**, then `adb connect
 <address>:5555` from a computer allowed to reach it. It switches itself off after 5 minutes, and can be
-limited to your computer's subnet. These frames run root ADB with no key check, so read the
+limited to your computer's subnet (it won't start until one is saved). These frames run root ADB with no key check, so read the
 [kiosk guide](kiosk/README.md#wireless-adb-14) before using it.
 
 ### Connecting devices

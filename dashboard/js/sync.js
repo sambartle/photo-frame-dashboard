@@ -229,7 +229,15 @@
     }
     setInterval(function () {
       if (sockOpen && sock) {
-        if (Date.now() - lastPong > 75000) { try { sock.close(); } catch (e) {} return; }
+        if (Date.now() - lastPong > 75000) {
+          // No pong: the connection is dead (Wi-Fi dropped silently). Don't wait for the close handshake,
+          // which can take a long time on a half-open connection and meanwhile keeps the fallback poll off:
+          // forget the socket (its onclose then does nothing) and reconnect now.
+          var dead = sock;
+          try { dead.close(); } catch (e) {}
+          reconnect();
+          return;
+        }
         try { sock.send('ping'); } catch (e) {}
       }
     }, 30000);
