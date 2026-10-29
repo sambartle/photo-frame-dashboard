@@ -436,6 +436,7 @@ public class MainActivity extends Activity {
   private int lcdblSaved = -1; // level before going dark
   private boolean dark;        // backlight route: held at 0 now
   static final String PREF_AUTO_OFF = "autobright_off"; // we turned auto-brightness off and owe it back
+  static final String PREF_MANUAL_BRIGHT = "manualbright"; // the manual brightness setting to give back with it
 
   private int readLcdbl() {
     try (BufferedReader r = new BufferedReader(new FileReader(LCDBL))) {
@@ -466,6 +467,12 @@ public class MainActivity extends Activity {
 
   private static String setLevel(int level) { return "echo " + level + " > " + LCDBL; }
   private static String setAuto(int mode) { return "settings put system screen_brightness_mode " + mode; }
+
+  /** "; settings put ..." giving back the manual brightness setting goDark lowered, or "". Only after auto is on again. */
+  private String manualBrightnessCmd() {
+    int m = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_MANUAL_BRIGHT, -1);
+    return m >= 0 ? "; settings put system screen_brightness " + m : "";
+  }
 
   private int autoMode() {
     return Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE, 0);
@@ -498,11 +505,16 @@ public class MainActivity extends Activity {
     int now = readLcdbl();
     if (now > 0) lcdblSaved = now;
     final boolean wasAuto = autoMode() == 1;
-    if (wasAuto) getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_OFF, true).apply();
+    // Turning auto-brightness off makes Android jump the panel to the manual brightness setting, which
+    // was a visible flash before the backlight is written to 0. So the manual setting goes to its minimum
+    // first (while auto is still in charge, so nothing changes), and is given back after auto is on again.
+    final int manual = Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, -1);
+    if (wasAuto) getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_AUTO_OFF, true)
+        .putInt(PREF_MANUAL_BRIGHT, manual).apply();
     dark = true;
     new Thread(() -> {
       if (wasAuto) {
-        su(setAuto(0));
+        su((manual >= 0 ? "settings put system screen_brightness 1; " : "") + setAuto(0));
         try { Thread.sleep(400); } catch (InterruptedException e) { return; } // let Android react first
       }
       su(setLevel(0));
@@ -516,12 +528,14 @@ public class MainActivity extends Activity {
     dark = false;
     handler.removeCallbacks(holdDark);
     handler.removeCallbacks(verifyDark);
-    final int level = lcdblSaved > 0 ? lcdblSaved : 255;
     final boolean owed = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_AUTO_OFF, false);
-    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_AUTO_OFF).apply();
+    // Unknown level (the kiosk restarted while dark): start dim and let auto-brightness ramp up, not a flash at 255.
+    final int level = lcdblSaved > 0 ? lcdblSaved : owed ? 60 : 255;
+    final String manual = manualBrightnessCmd();
+    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_AUTO_OFF).remove(PREF_MANUAL_BRIGHT).apply();
     new Thread(() -> {
       su(setLevel(level));
-      if (owed) su(setAuto(1)); // Android then ramps to the right level for the light
+      if (owed) su(setAuto(1) + manual); // Android then ramps to the right level for the light
     }).start();
   }
 
@@ -530,10 +544,11 @@ public class MainActivity extends Activity {
     final boolean owed = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_AUTO_OFF, false);
     final boolean black = readLcdbl() == 0;
     if (!owed && !black) return;
-    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_AUTO_OFF).apply();
+    final String manual = manualBrightnessCmd();
+    getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_AUTO_OFF).remove(PREF_MANUAL_BRIGHT).apply();
     new Thread(() -> {
-      if (black) su(setLevel(255));
-      if (owed) su(setAuto(1));
+      if (black) su(setLevel(owed ? 60 : 255));
+      if (owed) su(setAuto(1) + manual);
     }).start();
   }
 

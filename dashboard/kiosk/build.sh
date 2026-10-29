@@ -29,7 +29,7 @@ fi
 # Target 28: Android 15 refuses to install below 24, and Android 14+ warns below 28 on the first
 # launch. Targets of 30 and up need manifest changes (package visibility, exported), so stay at 28.
 "$BT/aapt2" link -o build/base.apk -I "$JAR" --manifest AndroidManifest.xml ${ASSETS[@]+"${ASSETS[@]}"} build/res.zip \
-  --java build/gen --min-sdk-version 23 --target-sdk-version 28 --version-code 10 --version-name 1.4.2
+  --java build/gen --min-sdk-version 23 --target-sdk-version 28 --version-code 11 --version-name 1.4.3
 
 javac -nowarn -source 8 -target 8 -classpath "$JAR" -d build/classes \
   src/com/wesbos/homehq/*.java build/gen/com/wesbos/homehq/R.java
