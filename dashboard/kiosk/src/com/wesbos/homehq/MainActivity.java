@@ -221,8 +221,17 @@ public class MainActivity extends Activity {
   private static final Handler ADB_HANDLER = new Handler(Looper.getMainLooper());
   private static Runnable adbOffTask;
   private String adbError = "";
+  // One start or stop touches adbd and the firewall at a time (ADB_LOCK); a stop bumps adbGen so a start
+  // that was still running when it was turned off finishes by closing again instead of arming the window.
+  private static final Object ADB_LOCK = new Object();
+  private static int adbGen;
+  private static boolean adbStarting;
+  // The window also has an off-switch outside this process: a detached shell that closes it after the
+  // window if this app has died or been replaced by then. It only acts if its token is still the current one.
+  static final String ADB_TOKEN_PROP = "debug.homehq.adb";
+  static final long ADB_WATCHDOG_GRACE_S = 10;
 
-  private static void armAdbOff(final Context app, long ms) {
+  private static synchronized void armAdbOff(final Context app, long ms) {
     if (adbOffTask != null) ADB_HANDLER.removeCallbacks(adbOffTask);
     adbOffTask = () -> stopAdbNow(app);
     ADB_HANDLER.postDelayed(adbOffTask, ms);
@@ -235,7 +244,9 @@ public class MainActivity extends Activity {
     java.util.regex.Matcher m = CIDR.matcher(c);
     if (!m.matches()) return false;
     for (int i = 1; i <= 4; i++) if (Integer.parseInt(m.group(i)) > 255) return false;
-    return Integer.parseInt(m.group(5)) <= 32;
+    // /16 or narrower: a "subnet" like /0 or /4 would be the whole network under another name ("any" is for that).
+    int prefix = Integer.parseInt(m.group(5));
+    return prefix >= 16 && prefix <= 32;
   }
 
   /** The saved subnet, "any" (open to the network, asked for explicitly), or "" (none saved: it won't start). */
@@ -285,6 +296,14 @@ public class MainActivity extends Activity {
     }
   }
 
+  /** Shell: close the port, remove our firewall rules (v4 and v6), clear the token. */
+  private static String closeCmd(boolean restartAdbd) {
+    return (restartAdbd ? "setprop service.adb.tcp.port 0; stop adbd; start adbd; " : "")
+        + "iptables -D INPUT -p tcp --dport 5555 -j " + ADB_CHAIN + " 2>/dev/null; iptables -F " + ADB_CHAIN + " 2>/dev/null;"
+        + " iptables -X " + ADB_CHAIN + " 2>/dev/null; ip6tables -D INPUT -p tcp --dport 5555 -j DROP 2>/dev/null;"
+        + " setprop " + ADB_TOKEN_PROP + " \"\"; true";
+  }
+
   private void startAdb() {
     final String from = adbFrom();
     adbError = "";
@@ -292,50 +311,71 @@ public class MainActivity extends Activity {
       adbError = "no subnet saved: over USB, adb shell am start -n com.wesbos.homehq/.MainActivity --es adbfrom <your computer's subnet>";
       return;
     }
+    synchronized (MainActivity.class) {
+      if (adbStarting) return;
+      adbStarting = true;
+    }
+    final int gen;
+    synchronized (MainActivity.class) { gen = adbGen; }
     new Thread(() -> {
-      boolean ok = true;
-      if (!from.equals("any")) {
-        // Only that subnet may reach the port, everything else is dropped; IPv6 can't be matched by
-        // subnet here, so it's blocked outright. No rules, no ADB.
-        ok = su("iptables -N " + ADB_CHAIN + " 2>/dev/null; iptables -F " + ADB_CHAIN
-            + " && iptables -A " + ADB_CHAIN + " -s " + from + " -j ACCEPT && iptables -A " + ADB_CHAIN + " -j DROP"
-            + " && (iptables -C INPUT -p tcp --dport 5555 -j " + ADB_CHAIN + " 2>/dev/null"
-            + " || iptables -I INPUT 1 -p tcp --dport 5555 -j " + ADB_CHAIN + ")");
-        su("ip6tables -C INPUT -p tcp --dport 5555 -j DROP 2>/dev/null || ip6tables -I INPUT 1 -p tcp --dport 5555 -j DROP");
-        if (!ok) adbError = "could not set the address lock, so it stays closed";
-      }
-      if (ok) {
-        ok = su("setprop service.adb.tcp.port 5555; stop adbd; start adbd");
-        if (!ok) adbError = "could not start adbd on 5555";
-      }
-      if (ok) {
-        long until = System.currentTimeMillis() + ADB_WINDOW_MS;
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong(PREF_ADB_UNTIL, until).apply();
-        armAdbOff(getApplicationContext(), ADB_WINDOW_MS);
-        Log.i(TAG, "Wireless ADB on for 5 minutes" + (from.equals("any") ? " (open to the network)" : ", from " + from));
-      } else {
-        closeAdb();
+      try {
+        synchronized (ADB_LOCK) {
+          boolean ok = true;
+          if (!from.equals("any")) {
+            // Only that subnet may reach the port, everything else is dropped. IPv6 can't be matched by
+            // subnet here, so it's blocked outright. If either rule can't be made: no rules, no ADB.
+            ok = su("iptables -N " + ADB_CHAIN + " 2>/dev/null; iptables -F " + ADB_CHAIN
+                + " && iptables -A " + ADB_CHAIN + " -s " + from + " -j ACCEPT && iptables -A " + ADB_CHAIN + " -j DROP"
+                + " && (iptables -C INPUT -p tcp --dport 5555 -j " + ADB_CHAIN + " 2>/dev/null"
+                + " || iptables -I INPUT 1 -p tcp --dport 5555 -j " + ADB_CHAIN + ")");
+            if (ok) ok = su("ip6tables -C INPUT -p tcp --dport 5555 -j DROP 2>/dev/null || ip6tables -I INPUT 1 -p tcp --dport 5555 -j DROP");
+            if (!ok) adbError = "could not set the address lock (IPv4 and IPv6), so it stays closed";
+          }
+          if (ok) {
+            // The token and the detached watchdog go in before adbd opens, so there's no moment it is open
+            // without a timer that doesn't depend on this app.
+            final String token = Long.toString(System.currentTimeMillis());
+            ok = su("setprop " + ADB_TOKEN_PROP + " " + token
+                + "; nohup sh -c 'sleep " + (ADB_WINDOW_MS / 1000 + ADB_WATCHDOG_GRACE_S) + "; [ \"$(getprop " + ADB_TOKEN_PROP + ")\" = " + token + " ] && { "
+                + closeCmd(true) + " }' >/dev/null 2>&1 </dev/null &");
+            if (!ok) adbError = "could not start the off-timer, so it stays closed";
+          }
+          if (ok) {
+            ok = su("setprop service.adb.tcp.port 5555; stop adbd; start adbd");
+            if (!ok) adbError = "could not start adbd on 5555";
+          }
+          boolean stopped;
+          synchronized (MainActivity.class) { stopped = gen != adbGen; }
+          if (ok && !stopped) {
+            long until = System.currentTimeMillis() + ADB_WINDOW_MS;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putLong(PREF_ADB_UNTIL, until).apply();
+            armAdbOff(getApplicationContext(), ADB_WINDOW_MS);
+            Log.i(TAG, "Wireless ADB on for 5 minutes" + (from.equals("any") ? " (open to the network)" : ", from " + from));
+          } else {
+            closeAdb();
+          }
+        }
+      } finally {
+        synchronized (MainActivity.class) { adbStarting = false; }
       }
     }).start();
   }
 
   private void stopAdb() { stopAdbNow(getApplicationContext()); }
 
-  private static void stopAdbNow(Context app) {
+  private static synchronized void stopAdbNow(Context app) {
+    adbGen++;
     if (adbOffTask != null) ADB_HANDLER.removeCallbacks(adbOffTask);
     adbOffTask = null;
     app.getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_ADB_UNTIL).apply();
-    new Thread(MainActivity::closeAdb).start();
+    new Thread(() -> { synchronized (ADB_LOCK) { closeAdb(); } }).start();
     Log.i(TAG, "Wireless ADB off");
   }
 
   /** Close the port and remove our firewall rules. adbd is only restarted if the network port was on, so
-   *  a USB session isn't dropped for nothing. */
+   *  a USB session isn't dropped for nothing. Called with ADB_LOCK held. */
   private static void closeAdb() {
-    boolean wasOn = getprop("service.adb.tcp.port").equals("5555");
-    su((wasOn ? "setprop service.adb.tcp.port 0; stop adbd; start adbd; " : "")
-        + "iptables -D INPUT -p tcp --dport 5555 -j " + ADB_CHAIN + " 2>/dev/null; iptables -F " + ADB_CHAIN + " 2>/dev/null;"
-        + " iptables -X " + ADB_CHAIN + " 2>/dev/null; ip6tables -D INPUT -p tcp --dport 5555 -j DROP 2>/dev/null; true");
+    su(closeCmd(getprop("service.adb.tcp.port").equals("5555")));
   }
 
   /** The kiosk restarts after an update: keep an open window running to its end, and close one that has

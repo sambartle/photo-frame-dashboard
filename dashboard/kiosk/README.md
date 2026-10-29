@@ -98,7 +98,9 @@ Installing an update is easier over Wi-Fi than finding the cable. Hold the clock
 press **D**), find **Wireless ADB** in the display controls and tap **Turn on for 5 min**. It shows the
 address to connect to, counts down, and switches itself off. It's the same as `adb tcpip 5555`:
 `service.adb.tcp.port` set and `adbd` restarted through `su`, so a reboot closes it too. The timer is kept
-by the kiosk and survives the restart that an install causes.
+by the kiosk and survives the restart that an install causes; from 1.4.2 a detached shell also closes it
+if the app itself has died (a token check, so a newer window isn't cut short). The subnet must be /16 or
+narrower, and the IPv6 block has to succeed as well as the IPv4 rules, or it stays closed.
 
 **Be careful: these frames run root ADB with no key check (`ro.adb.secure=0`),** so while it's on, anyone
 who can reach port 5555 has a root shell. That's why it's off by default, only started by someone at the

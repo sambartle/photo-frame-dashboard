@@ -344,11 +344,13 @@
       // counting, instead of saying "now" over an old picture.
       if (++V.camTick >= 20) {
         V.camTick = 0;
-        var cams = App.$$('.cam', V.el), left = cams.length, worst = 0;
+        var cams = App.$$('.cam', V.el), left = cams.length, worst = 0, failed = false;
         cams.forEach(function (b) {
+          // done() always comes (-1 = no new picture), so a skipped, hung or failed one can't leave the
+          // round open; the label only resets when every picture really refreshed.
           App.refreshCamera(b.querySelector('img'), b.dataset.cam, function (stale) {
-            worst = Math.max(worst, stale);
-            if (--left === 0) V.camAge = worst;
+            if (stale < 0) failed = true; else worst = Math.max(worst, stale);
+            if (--left === 0 && !failed) V.camAge = worst;
           });
         });
       }
@@ -366,7 +368,9 @@
           '</div>';
         el.addEventListener('click', onClick);
       }
-      el.querySelector('.hc-cams').innerHTML = cams();
+      var hc = el.querySelector('.hc-cams');
+      App.$$('img', hc).forEach(App.releaseCamera); // the pictures being replaced: free their blobs
+      hc.innerHTML = cams();
       paint();
       camTimer();
     },

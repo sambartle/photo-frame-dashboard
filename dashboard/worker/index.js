@@ -708,6 +708,11 @@ function forgetSnapshot(env) {
   if (env) drop.push(putCache(env, 'ha-dirty', { at: Date.now() }, DAY_MS));
   return Promise.all(drop).catch(() => {});
 }
+// The control didn't happen (refused, or Home Assistant failed): lift the mark so pushes are used again
+// instead of every read going to Home Assistant until the next push.
+function unforgetSnapshot(env) {
+  return env.DB.prepare('DELETE FROM cache WHERE key = ?').bind('ha-dirty').run().catch(() => {});
+}
 function dropSnapshots() {
   return Promise.all(['ha-snap', 'home-view'].map((k) => caches.default.delete(new Request('https://cache.homehq.internal/' + k)))).catch(() => {});
 }
@@ -904,6 +909,7 @@ async function mediaControl(env, id, b) {
   try {
     await haService(env, 'media_player', op[0], Object.assign({ entity_id: id }, op[1] ? op[1](b.value) : {}));
   } catch (err) {
+    await unforgetSnapshot(env);
     // Home Assistant answers 500 when the player can't do it (nothing loaded, or it's asleep).
     const s = await ha(env, '/api/states/' + id).then((r) => r.ok ? r.json() : null).catch(() => null);
     const name = (s && s.attributes && s.attributes.friendly_name) || id;
@@ -1023,7 +1029,10 @@ async function controlDevice(env, entity, p) {
   const d = CFG.devices.find((x) => x.entity === entity) || (CFG.alerts.doorbell && CFG.alerts.doorbell.lock === entity ? { entity } : null);
   if (!d) return bad('unknown device', 404);
   const domain = entity.split('.')[0], target = { entity_id: entity };
+  const known = (domain === 'lock' && 'locked' in p) || (domain === 'cover' && ('state' in p || 'pos' in p)) || 'on' in p;
+  if (!known) return bad('nothing to change');
   await forgetSnapshot(env);
+  try {
   if (domain === 'lock' && 'locked' in p) await haService(env, 'lock', p.locked ? 'lock' : 'unlock', target);
   else if (domain === 'cover' && 'state' in p) await haService(env, 'cover', p.state === 'open' || p.state === 'opening' ? 'open_cover' : 'close_cover', target);
   else if (domain === 'cover' && 'pos' in p) {
@@ -1035,15 +1044,20 @@ async function controlDevice(env, entity, p) {
     if (!p.on) await haService(env, domain, 'turn_off', target);
     else if (domain === 'light' && p.level) await haService(env, 'light', 'turn_on', Object.assign({ brightness_pct: Math.max(1, Math.min(100, Math.round(+p.level))) }, target));
     else await haService(env, domain, 'turn_on', target);
-  } else return bad('nothing to change');
+  }
+  } catch (err) {
+    await unforgetSnapshot(env);
+    throw err;
+  }
   await dropSnapshots();
   return json({ ok: true });
 }
 
 async function homeAction(env, what, b) {
   await forgetSnapshot(env);
-  const res = await homeActionRun(env, what, b);
-  if (res.ok) await dropSnapshots();
+  let res;
+  try { res = await homeActionRun(env, what, b); } catch (err) { await unforgetSnapshot(env); throw err; }
+  if (res.ok) await dropSnapshots(); else await unforgetSnapshot(env);
   return res;
 }
 async function homeActionRun(env, what, b) {
@@ -1092,14 +1106,16 @@ async function cameraImage(env, id) {
 // Pictures fetched for the frame come back as plain images only: whatever the source claims, it is
 // passed on as an image type with nosniff and a sandboxing CSP, so even a page at that address can't
 // run under the dashboard's origin.
-const IMAGE_HEADERS = (type) => ({ 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
-async function imageResponse(res) {
+const IMAGE_HEADERS = (type, cache) => ({ 'content-type': type, 'cache-control': cache || 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
+// Artwork's address changes with the track (&v=), so the browser may keep it a while: no Worker call per render.
+const ART_CACHE = 'private, max-age=600';
+async function imageResponse(res, cache) {
   const type = res.headers.get('content-type') || '';
   if (!res.ok || !/^image\/[a-z0-9.+-]+$/i.test(type.split(';')[0].trim())) {
     if (res.body) res.body.cancel().catch(() => {});
     return new Response(null, { status: 404 });
   }
-  return new Response(res.body, { status: 200, headers: IMAGE_HEADERS(type.split(';')[0].trim()) });
+  return new Response(res.body, { status: 200, headers: IMAGE_HEADERS(type.split(';')[0].trim(), cache) });
 }
 async function haImage(env, which, url) {
   if (which === 'camera') {
@@ -1122,9 +1138,9 @@ async function haImage(env, which, url) {
     let u;
     try { u = new URL(pic); } catch (e) { return new Response(null, { status: 404 }); }
     if (u.protocol !== 'https:') return new Response(null, { status: 404 });
-    return imageResponse(await fetch(u.href, { signal: AbortSignal.timeout(8e3) }).catch(() => new Response(null, { status: 502 })));
+    return imageResponse(await fetch(u.href, { signal: AbortSignal.timeout(8e3) }).catch(() => new Response(null, { status: 502 })), ART_CACHE);
   }
-  return imageResponse(await ha(env, pic, { headers: { 'content-type': '' } }));
+  return imageResponse(await ha(env, pic, { headers: { 'content-type': '' } }), ART_CACHE);
 }
 
 // ------------------------------------------------------------------ photos

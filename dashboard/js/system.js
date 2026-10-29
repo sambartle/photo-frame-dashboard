@@ -5,25 +5,38 @@
 
   // Refresh a camera picture in place: fetch the new one, check it loads, and only then swap it in, so
   // a slow or failed refresh (Home Assistant answers a sleeping camera with a 500 after 10 s) or a bad
-  // picture leaves the old one up instead of a broken-image icon. done(seconds) is called only when a
-  // picture was swapped in, with how old it is (0 = fresh; the Worker sends the last good one when Home
-  // Assistant fails). One refresh at a time per picture: a request can take up to 8 s while the doorbell
+  // picture leaves the old one up instead of a broken-image icon. done(seconds) is called once per call:
+  // with how old the new picture is when one was swapped in (0 = fresh; the Worker sends the last good one
+  // when Home Assistant fails), or -1 when nothing was (failed, timed out, skipped as busy). One refresh at a time per picture: a request can take up to 8 s while the doorbell
   // asks every 2 s, and an older answer must never land on top of a newer one.
   App.refreshCamera = function (img, id, done) {
-    if (!window.fetch || !window.URL || !URL.createObjectURL) { img.src = App.cameraSrc(id); return; }
-    if (img._busy) return;
+    if (!window.fetch || !window.URL || !URL.createObjectURL) { img.src = App.cameraSrc(id); if (done) done(0); return; }
+    if (img._busy) { if (done) done(-1); return; }
     img._busy = true;
-    var url = null;
-    function finish(keep) { if (url && !keep) URL.revokeObjectURL(url); img._busy = false; }
-    fetch(App.cameraSrc(id), { credentials: 'same-origin' }).then(function (r) {
+    var url = null, over = false, ctl = window.AbortController ? new AbortController() : null;
+    // A request that never answers (Wi-Fi dropped half-way) must not leave the picture stuck: give up
+    // after 12 s (the Worker's own limit is 8 s) and let the next round try again.
+    var giveUp = setTimeout(function () { if (ctl) ctl.abort(); over = true; finish(false); }, 12e3);
+    var settled = false;
+    function finish(keep) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(giveUp);
+      if (url && !keep) URL.revokeObjectURL(url);
+      img._busy = false;
+      if (!keep && done) done(-1);
+    }
+    fetch(App.cameraSrc(id), { credentials: 'same-origin', signal: ctl ? ctl.signal : undefined }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       var stale = +r.headers.get('x-stale') || 0;
       return r.blob().then(function (b) { return { b: b, stale: stale }; });
     }).then(function (x) {
+      if (over) return;
       if (!img.isConnected) { finish(false); return; }
       url = URL.createObjectURL(x.b);
       var probe = new Image();
       probe.onload = function () {
+        if (over) { URL.revokeObjectURL(url); return; }
         if (!img.isConnected) { finish(false); return; }
         var before = img.getAttribute('data-blob');
         img.setAttribute('data-blob', url);
@@ -32,9 +45,9 @@
         finish(true);
         if (done) done(x.stale);
       };
-      probe.onerror = function () { finish(false); };
+      probe.onerror = function () { if (!over) finish(false); };
       probe.src = url;
-    }, function () { finish(false); });
+    }, function () { if (!over) finish(false); });
   };
   // Let go of a picture's memory (a takeover closing: the picture is never shown again).
   App.releaseCamera = function (img) {
@@ -46,6 +59,8 @@
   // ------------------------------------------------------------ full-screen takeovers
   function takeover(html, cls) {
     var el = $('#takeover');
+    clearInterval(camTimer);
+    App.releaseCamera(el.querySelector('.tk-cam img')); // a takeover replaced by another one: free the old picture
     el.className = 'takeover ' + (cls || '');
     el.innerHTML = html;
     el.classList.add('is-open');
