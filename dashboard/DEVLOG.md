@@ -388,6 +388,16 @@ frame can differ. Keys: `hq-night` (Dim, Bright, Sleep, Wake, Sleep on/off), `hq
   kill that shell (exit 144). Write the pattern so it can't match itself, or kill by PID.
 - Scratch copies of Home Assistant data (the state list holds positions and camera tokens) belong
   in a scratch folder and are deleted afterwards.
+- **Upstream merge and frame checks, 2026-11-02** (merged `wesbos/main`, 8b19d47; both frames on kiosk
+  1.4.3). From the upstream issues, applied by hand and logged in each frame's private `changes.jsonl`:
+  the PF1007L boot scripts re-applied (`install.sh apply`) for the Wi-Fi restart when Android gives up
+  starting the driver (#221; check the local `frame-boot.conf` MAC matches the frame's before applying, it
+  is gitignored and had been blanked); the AAA Certificate Services root (`75680d2e.0`) copied to
+  `/data/misc/user/0/cacerts-removed/` on both frames for the compromised eMudhra chains (#229; two
+  advisory hosts refused in the kiosk on each; undo by deleting the file). #256 (remount overlay on
+  `/cache`) does not apply to the C-2: its overlay is on `scratch`, nothing listens on 5555 at boot and
+  14035 is dropped. The IPv6 block for wireless ADB works on the C-2 (`ip6tables` present).
+  Not adopted: #259 (clock re-poll), #278 (VIEW link scheme), #253 (frame firewall); see the PRs.
 
 ## Version history
 
@@ -397,7 +407,7 @@ Dates are 2026; the commit is the one the version shipped in (a commit can hold 
 | --- | --- | --- | --- |
 | 1.23.1 / kiosk 1.4.1 | 6ff060c | 28 Oct | Code review fixes: wireless ADB refuses without a subnet; the alert socket reconnects at once when it stops answering; `ha-dirty` stamped before a control; camera refreshes one at a time and preloaded; ADB section stops losing taps; backlight re-darkens on resume; ADB timer static; artwork https-only and image-only |
 | 1.23.2 / kiosk 1.4.2 | 997f838 | 29 Oct | Second code review, nine fixes. Kiosk: wireless ADB also needs the IPv6 block to succeed; subnets must be /16 or narrower (`any` is the only way to open it wide); an off-timer that runs outside the app (detached shell with a token) so a crash or update can't leave it open; start and stop serialised so a stop can't be undone by a start still running. Frame: a hung camera fetch times out after 12 s; blob URLs freed when a takeover is replaced or the cameras are redrawn; the camera age label only resets when every picture refreshed. Worker: artwork cached 10 min by the browser (its address changes per track); a refused or failed control no longer leaves `ha-dirty` set |
-| kiosk 1.4.3 | — | 29 Oct | Backlight mode, PF1007L: no flash going dark (the manual brightness setting is lowered while auto-brightness is still in charge, and given back after it's on again; Android otherwise jumps the panel to that setting for ~0.4 s when auto is switched off) and a dimmer start on wake when the old level is unknown (60, not 255). Checked on the PF1007L by eye: both flashes gone or much reduced |
+| kiosk 1.4.3 | ca2f061 | 29 Oct | Backlight mode, PF1007L: no flash going dark (the manual brightness setting is lowered while auto-brightness is still in charge, and given back after it's on again; Android otherwise jumps the panel to that setting for ~0.4 s when auto is switched off) and a dimmer start on wake when the old level is unknown (60, not 255). Checked on the PF1007L by eye: both flashes gone or much reduced |
 | 1.23 / kiosk 1.4 | 96017a3 | 26 Oct | Wireless ADB: a 5-minute window from the display controls, limited to a saved subnet with firewall rules that fail closed; two deploy scripts per frame (USB and Wi-Fi) |
 | 1.22.1 | 75f706e | 25 Oct | Camera snapshots keep the last good picture and are swapped in only once loaded (Home Assistant's 10 s camera timeout caused a 500 every 20 s); media artwork via `entity_picture_local`; doorbell `off` switch; unexplained `refreshBlink` removed |
 | 1.22 | 9319129 | 25 Oct | Alerts over a WebSocket to the `AlertHub` Durable Object: instant, no polling, ~0 CPU idle (the 1.16 long poll cost 20-22 ms per call); old pages' `?since=` loop held for 20 s |
