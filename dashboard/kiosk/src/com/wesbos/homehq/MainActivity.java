@@ -13,6 +13,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
@@ -47,6 +48,8 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -55,6 +58,7 @@ import java.util.Map;
  * Full-screen kiosk WebView for the Home HQ wall tablet.
  * - Immersive mode hides the status + navigation bars (true 1280x800).
  * - Controls: hold two fingers still on the screen for 1.5s for launcher/settings/Wi-Fi/reload.
+ *   Optional single-tap Menu button: launch with --ez menu_button true (false removes it).
  * - Offline: a failed page load shows a native screen instead of WebView's error page (which
  *   prints the full URL, including any token in it). With no Wi-Fi it offers Wi-Fi settings.
  * - Remote debugging is OFF unless launched with the debug extra (every app on this device
@@ -67,6 +71,8 @@ import java.util.Map;
  * - Offer the kiosk as a Home app (--ez home false undoes it), then pick it:
  *     adb shell am start -n com.wesbos.homehq/.MainActivity --ez home true
  *     adb shell cmd package set-home-activity com.wesbos.homehq/.Home
+ * - Wi-Fi with a sign-in page (captive portal): when the dashboard can't load on Wi-Fi, the kiosk
+ *   checks for one and shows it, so the terms can be accepted; then it returns to the dashboard.
  */
 public class MainActivity extends Activity {
   static final String TAG = "HomeHQ";
@@ -80,6 +86,7 @@ public class MainActivity extends Activity {
   static final String ADB_CHAIN = "homehq_adb";
   /** Allwinner display driver's backlight level (0-255); root-writable only. */
   static final String LCDBL = "/sys/class/disp/disp/attr/lcdbl";
+  static final String PREF_MENU_BUTTON = "menu_button";
   static final long EXIT_HOLD_MS = 1500;
   static final int CANCEL_POINTER_IDS = 10; // touch ids 0-9
   static final long RETRY_MS = 5000;
@@ -90,8 +97,16 @@ public class MainActivity extends Activity {
   static final String LOCAL_HOST = "127.0.0.1";
   static final int LOCAL_PORT = 8765;
   static final String LOCAL_ASSETS = "site";
+  // Android's own captive portal check: 204 when online, anything else when a portal answers.
+  // Plain HTTP so a portal can redirect it, and so it works before the clock is set.
+  static final String PORTAL_PROBE = "http://connectivitycheck.gstatic.com/generate_204";
+  static final int PROBE_TIMEOUT_MS = 10000;
+  static final long PORTAL_CHECK_MS = 5000;
+  static final long PORTAL_GIVE_UP_MS = 10 * 60 * 1000;
+  static final int PROBE_ONLINE = 0, PROBE_PORTAL = 1, PROBE_FAILED = 2;
 
   private WebView web;
+  private Button menuButton;
   private final Handler handler = new Handler(Looper.getMainLooper());
   // Not cleared in onDestroy, so a navigation rebind that has started always finishes.
   private final Handler rebindHandler = new Handler(Looper.getMainLooper());
@@ -106,6 +121,12 @@ public class MainActivity extends Activity {
   private boolean retryPending;
   private LinearLayout offline;
   private TextView offlineTitle, offlineText;
+  private Button signIn;
+  // Captive portal: found by the last probe, on screen, closed by the owner, or its page failed.
+  private boolean probing, portalFound, portalMode, portalDismissed, portalFailed;
+  private long portalSince;
+  private LinearLayout portalBar;
+  private TextView portalText;
 
   private final Runnable retry = new Runnable() {
     @Override
@@ -144,11 +165,15 @@ public class MainActivity extends Activity {
     }
   };
 
+  // While the sign-in page is up, check every few seconds whether the frame is online yet.
+  private final Runnable portalCheck = this::checkPortal;
+
   private final Runnable showControls = new Runnable() {
     @Override
     public void run() {
       exitArmed = false;
-      Log.i(TAG, "Two-finger hold: opening controls");
+      handler.removeCallbacks(showControls);
+      Log.i(TAG, "Opening kiosk controls");
       cancelPageTouches();
       new AlertDialog.Builder(MainActivity.this)
           .setTitle("Home HQ")
@@ -651,6 +676,12 @@ public class MainActivity extends Activity {
       @Override
       @SuppressWarnings("deprecation")
       public void onReceivedError(WebView view, int code, String desc, String failingUrl) {
+        if (portalMode) {
+          // The sign-in page itself didn't load; the next portal check loads it again.
+          Log.w(TAG, "Wi-Fi sign-in page failed (" + desc + ")");
+          portalFailed = true;
+          return;
+        }
         Log.w(TAG, "Load failed (" + desc + "), retrying in " + RETRY_MS + " ms");
         pageFailed = true;
         showOffline();
@@ -673,6 +704,12 @@ public class MainActivity extends Activity {
           Log.w(TAG, "Certificate error " + error.getPrimaryError() + " on a subresource; blocked");
           return;
         }
+        if (portalMode) {
+          Log.w(TAG, "Certificate error " + error.getPrimaryError() + " on the Wi-Fi sign-in page");
+          portalFailed = true;
+          portalText.setText("This Wi-Fi's sign-in page has a certificate problem. Trying again\u2026");
+          return;
+        }
         Log.w(TAG, "Certificate error " + error.getPrimaryError() + ", retrying in " + RETRY_MS + " ms");
         pageFailed = true;
         showOffline();
@@ -688,9 +725,31 @@ public class MainActivity extends Activity {
         handler.postDelayed(retry, RETRY_MS);
       }
     });
+    LinearLayout column = new LinearLayout(this);
+    column.setOrientation(LinearLayout.VERTICAL);
+    column.addView(buildPortalBar());
+    column.addView(web, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
     FrameLayout root = new FrameLayout(this);
-    root.addView(web);
+    root.addView(column);
     root.addView(buildOffline());
+    menuButton = new Button(this);
+    menuButton.setText("Menu");
+    menuButton.setAllCaps(false);
+    menuButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+    menuButton.setTextColor(Color.WHITE);
+    menuButton.setContentDescription("Open kiosk controls");
+    menuButton.setPadding(0, 0, 0, 0);
+    GradientDrawable menuBackground = new GradientDrawable();
+    menuBackground.setColor(Color.argb(220, 35, 35, 35));
+    menuBackground.setCornerRadius(dp(10));
+    menuBackground.setStroke(dp(1), Color.rgb(90, 90, 90));
+    menuButton.setBackground(menuBackground);
+    menuButton.setOnClickListener(v -> showControls.run());
+    FrameLayout.LayoutParams menuPosition = new FrameLayout.LayoutParams(
+        dp(72), dp(48), Gravity.BOTTOM | Gravity.LEFT);
+    menuPosition.setMargins(dp(12), dp(12), dp(12), dp(12));
+    root.addView(menuButton, menuPosition);
+    applyMenuButtonFlag(getIntent());
     setContentView(root);
 
     String url = urlFrom(getIntent());
@@ -727,8 +786,10 @@ public class MainActivity extends Activity {
     applyHomeFlag(intent);
     applyScreenOffFlag(intent);
     applyAdbFromFlag(intent);
+    applyMenuButtonFlag(intent);
     String url = urlFrom(intent);
     if (url != null) {
+      closePortal();
       handler.removeCallbacks(retry);
       handler.removeCallbacks(stall);
       retryPending = false;
@@ -849,7 +910,141 @@ public class MainActivity extends Activity {
     wifi.setOnClickListener(v -> openWifiSettings());
     offline.addView(wifi, new LinearLayout.LayoutParams(
         LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+    signIn = new Button(this);
+    signIn.setText("Sign in to Wi-Fi");
+    signIn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+    signIn.setPadding(dp(32), dp(16), dp(32), dp(16));
+    signIn.setVisibility(View.GONE);
+    signIn.setOnClickListener(v -> openPortal());
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+    lp.topMargin = dp(16);
+    offline.addView(signIn, lp);
     return offline;
+  }
+
+  /** The strip above the Wi-Fi sign-in page. */
+  private View buildPortalBar() {
+    portalBar = new LinearLayout(this);
+    portalBar.setOrientation(LinearLayout.HORIZONTAL);
+    portalBar.setGravity(Gravity.CENTER_VERTICAL);
+    portalBar.setBackgroundColor(Color.rgb(17, 17, 17));
+    portalBar.setPadding(dp(16), dp(8), dp(8), dp(8));
+    portalBar.setVisibility(View.GONE);
+
+    portalText = new TextView(this);
+    portalText.setTextColor(Color.WHITE);
+    portalText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+    portalBar.addView(portalText, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+    Button cancel = new Button(this);
+    cancel.setText("Cancel");
+    cancel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+    cancel.setOnClickListener(v -> {
+      portalDismissed = true;
+      leavePortal();
+    });
+    portalBar.addView(cancel);
+    return portalBar;
+  }
+
+  /** Probes PORTAL_PROBE off the main thread; the result goes to onProbe. One probe at a time. */
+  private void checkPortal() {
+    if (probing) return;
+    probing = true;
+    new Thread(() -> {
+      int result = probePortal();
+      handler.post(() -> {
+        probing = false;
+        if (!isDestroyed()) onProbe(result);
+      });
+    }, "portal-probe").start();
+  }
+
+  /** Runs on a background thread. Redirects are not followed, so a portal's redirect counts as a portal. */
+  static int probePortal() {
+    HttpURLConnection c = null;
+    try {
+      c = (HttpURLConnection) new URL(PORTAL_PROBE).openConnection();
+      c.setInstanceFollowRedirects(false);
+      c.setUseCaches(false);
+      c.setConnectTimeout(PROBE_TIMEOUT_MS);
+      c.setReadTimeout(PROBE_TIMEOUT_MS);
+      int code = c.getResponseCode();
+      // Like Android: an empty 200 (some proxies send it for 204) also means online.
+      if (code == 204 || (code == 200 && c.getContentLength() == 0)) return PROBE_ONLINE;
+      if (code >= 200 && code < 400) {
+        Log.i(TAG, "Wi-Fi sign-in page found (probe answered " + code + ")");
+        return PROBE_PORTAL;
+      }
+      return PROBE_FAILED;
+    } catch (IOException e) {
+      return PROBE_FAILED;
+    } finally {
+      if (c != null) c.disconnect();
+    }
+  }
+
+  private void onProbe(int result) {
+    if (portalMode) {
+      if (result == PROBE_ONLINE || !wifiConnected()) {
+        Log.i(TAG, result == PROBE_ONLINE ? "Signed in to Wi-Fi, back to the dashboard" : "Wi-Fi dropped during sign-in");
+        portalFound = false;
+        leavePortal();
+        return;
+      }
+      if (SystemClock.elapsedRealtime() - portalSince > PORTAL_GIVE_UP_MS) {
+        Log.w(TAG, "Wi-Fi sign-in page still up after 10 min, retrying the dashboard");
+        portalDismissed = true; // the offline screen offers "Sign in to Wi-Fi" instead
+        leavePortal();
+        return;
+      }
+      if (portalFailed && result == PROBE_PORTAL) {
+        portalFailed = false;
+        load(PORTAL_PROBE);
+      }
+      handler.postDelayed(portalCheck, PORTAL_CHECK_MS);
+      return;
+    }
+    portalFound = result == PROBE_PORTAL;
+    if (!portalFound || offline.getVisibility() != View.VISIBLE) return;
+    if (portalDismissed) setOfflineText(); // offers the Sign in button instead
+    else openPortal();
+  }
+
+  /**
+   * Shows the network's sign-in page in place of the dashboard. Loading the probe URL lets the
+   * portal redirect to its own page, as Android's sign-in app does.
+   */
+  private void openPortal() {
+    portalMode = true;
+    portalDismissed = false;
+    portalFailed = false;
+    portalSince = SystemClock.elapsedRealtime();
+    handler.removeCallbacks(retry);
+    handler.removeCallbacks(stall);
+    handler.removeCallbacks(portalCheck);
+    retryPending = false;
+    if (retryUrl == null) retryUrl = savedUrl();
+    portalText.setText("This Wi-Fi needs you to accept its terms. The dashboard comes back once the frame is online.");
+    portalBar.setVisibility(View.VISIBLE);
+    offline.setVisibility(View.GONE);
+    load(PORTAL_PROBE);
+    handler.postDelayed(portalCheck, PORTAL_CHECK_MS);
+  }
+
+  /** Closes the sign-in page and loads the dashboard again. */
+  private void leavePortal() {
+    closePortal();
+    load(retryUrl != null ? retryUrl : savedUrl());
+  }
+
+  private void closePortal() {
+    if (!portalMode) return;
+    portalMode = false;
+    handler.removeCallbacks(portalCheck);
+    portalBar.setVisibility(View.GONE);
   }
 
   private boolean wifiConnected() {
@@ -860,14 +1055,32 @@ public class MainActivity extends Activity {
   }
 
   private void showOffline() {
-    if (wifiConnected()) {
+    boolean wifi = setOfflineText();
+    offline.setVisibility(View.VISIBLE);
+    // On Wi-Fi, a sign-in page may be what's blocking the dashboard.
+    if (wifi) checkPortal();
+  }
+
+  /** Fills in the offline screen for the current state; returns whether Wi-Fi is connected. */
+  private boolean setOfflineText() {
+    boolean wifi = wifiConnected();
+    if (!wifi) {
+      // A new network gets its sign-in page opened again, even if the last one was closed.
+      portalFound = false;
+      portalDismissed = false;
+    }
+    signIn.setVisibility(wifi && portalFound ? View.VISIBLE : View.GONE);
+    if (wifi && portalFound) {
+      offlineTitle.setText("Sign in to Wi-Fi");
+      offlineText.setText("This Wi-Fi shows a page where you accept its terms before the frame can go online.");
+    } else if (wifi) {
       offlineTitle.setText("Can't reach the dashboard");
       offlineText.setText("Wi-Fi is connected. Retrying every few seconds.");
     } else {
       offlineTitle.setText("Connect to Wi-Fi?");
       offlineText.setText("The frame isn't on Wi-Fi. The dashboard comes back by itself once it is.");
     }
-    offline.setVisibility(View.VISIBLE);
+    return wifi;
   }
 
   private void openWifiSettings() {
@@ -986,6 +1199,16 @@ public class MainActivity extends Activity {
     boolean debug = intent != null && intent.getBooleanExtra("debug", false);
     WebView.setWebContentsDebuggingEnabled(debug);
     Log.i(TAG, "WebView remote debugging " + (debug ? "ON" : "off"));
+  }
+
+  /** A saved opt-in for panels where the two-finger gesture is unreliable. */
+  private void applyMenuButtonFlag(Intent intent) {
+    if (intent != null && intent.hasExtra(PREF_MENU_BUTTON)) {
+      getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+          .putBoolean(PREF_MENU_BUTTON, intent.getBooleanExtra(PREF_MENU_BUTTON, false)).apply();
+    }
+    menuButton.setVisibility(getSharedPreferences(PREFS, MODE_PRIVATE)
+        .getBoolean(PREF_MENU_BUTTON, false) ? View.VISIBLE : View.GONE);
   }
 
   /** Turns the Home alias on or off. The shell can't enable a component of a release app. */

@@ -145,6 +145,14 @@ small browser that uses the system WebView (useful for testing WebView).
 2. Open Firefox from the dock. Optional: Settings → Customize → Theme → **Dark** (see below).
 3. Drag any other icons you want from the app drawer (swipe up) to the home screen.
 
+> **eMudhra (October 2026).** Eight eMudhra intermediate CAs had weak keys. Browsers block them
+> through updates that a frame's WebView never gets. They chain to `75680d2e.0` (AAA Certificate
+> Services, in stock Android 6 stores) and `b74d2bd5.0` (emSign ECC Root CA - G3, in newer AOSP
+> stores). Distrust them without a `/system` write. As root, copy each one present into
+> `/data/misc/user/0/cacerts-removed/` (folder `system:system` 0755, files 0644), then restart the
+> kiosk. To undo, delete the copies. Tested on two PF1007L units
+> ([#229](https://github.com/wesbos/photo-frame-dashboard/issues/229)).
+
 ## Known limits
 
 - **No Home or Recents button.** This firmware's SystemUI hard-codes them invisible; the navigation

@@ -22,8 +22,35 @@ This procedure was done on one unit. Use it only on a unit with these values:
 | SoC | Allwinner A33 |
 
 The scripts stop if the boot partition is not the tested one.
-`build-write.sh` refuses a boot image with a SHA-256 other than
-`d71c313ddaa4693948acb20af7740ccb56c88bf9376746a47fce2d00c14fc6a4`.
+`build-write.sh` refuses any original boot image that is not in its `TESTED` list (for this unit,
+`d71c313ddaa4693948acb20af7740ccb56c88bf9376746a47fce2d00c14fc6a4`).
+
+### Other boards with the boot partition at sector 172032
+
+The same scripts have been used on a [SOMY M10R7](somy-m10r7.md), whose p6 also starts at sector
+172032 but holds a different boot image. Its image is in the `TESTED` list. Everything else in this
+guide is unchanged.
+
+1. **4-bit eMMC.** If the dump reports `emmc_dev: ok` but `st_00=FAIL first read`, rebuild with
+   the eMMC at 4-bit, 26 MHz: `A33_EMMC_4BIT=1 bash scripts/a33-sdboot/build-macos.sh` (or the same
+   variable with `build.sh`). On macOS, run `card-macos.py clean` **before** rebuilding, because it
+   only recognises the build that is on the card; then delete `a33.scr` and `a33-status.txt` from
+   the card and run `prepare` again.
+2. **Your boot image's length and hash.** After a verified dump, print them:
+
+   ```sh
+   python -I scripts/a33-sdboot/patch-boot.py --inspect
+   ```
+
+   It also says whether the image is a tested one. If it is, pass the two values it prints to
+   `patch-boot.py` (`--boot-len N --expect-sha256 H`), then run `build-macos.sh apply` (and
+   `restore`) as usual. `patch-boot.py` stops if the kernel or the header outside the ramdisk size
+   and boot id would change. If the image is not tested, `build-write.sh` refuses it: don't edit
+   the list locally. Open a PR with the `--inspect` output and `REPORT.txt` instead.
+
+The patch assumes `/default.prop` and `/init.rc` in the ramdisk and no second/dt sections;
+`patch-boot.py` stops if that is not so. Don't use `--boot-len` to point the write at a
+different sector: the start sector is fixed in `boot-write.cmd.in`.
 
 ## 2. What the patch changes
 

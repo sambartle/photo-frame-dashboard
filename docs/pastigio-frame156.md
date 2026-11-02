@@ -197,6 +197,11 @@ was disabled, its private data, local media directory and installed APK were add
 archived and the tar was read back successfully. Dumps, APKs and whole-disk hashes stayed private.
 Firmware restoration and physical loader entry remain unverified.
 
+**Don't share a pre-userdata dump.** Sectors before `userdata` still hold per-unit data: chip and
+UID records in all five idbloader copies, Rockchip vendor storage in unpartitioned space, and
+Frameo licence and UUID files in `vendor` (also in its ext4 journal). Removing them may stop Frameo
+from activating. Restoring one unit's dump to another frame has not been tested (#209, #211).
+
 ### Kiosk startup and dashboard aspect ratio
 
 A separately implemented WebView kiosk with a HOME intent filter loaded the published demo

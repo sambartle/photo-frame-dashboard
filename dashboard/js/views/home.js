@@ -321,7 +321,7 @@
           '<div class="h-clock" data-go="calendar"></div>' +
           '<div class="h-weather"></div>' +
           '<div class="h-presence"></div>' +
-          '<div class="h-main"><div class="h-hero-slot"></div><div class="h-lanes" ></div></div>' +
+          '<div class="h-main"><div class="h-hero-slot"></div><div class="h-lanes" style="grid-template-columns:repeat(' + D.people.length + ',1fr)"></div></div>' +
           '<div class="h-side">' +
           '  <button class="h-photo" data-go="photos"><div class="h-photo-stage"></div><div class="h-photo-cap"></div></button>' +
           '  <button class="h-bins card" data-bins hidden></button>' +

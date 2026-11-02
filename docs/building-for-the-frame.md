@@ -130,8 +130,49 @@ does **not** add these functions; avoid them, or add a polyfill.
     not measured. A clock text change once a minute, or an image swapped every few seconds,
     is a separate cost.
 - Very large frameworks or bundles. Aim for a JS bundle in the low hundreds of KB.
-- Re-rendering the whole page every second. Update only what changes (the clock text, for
-  example).
+- Re-rendering the whole page every second. See [Keep routine updates small](#keep-routine-updates-small).
+
+## Keep routine updates small
+
+[Issue #156](https://github.com/wesbos/photo-frame-dashboard/issues/156) reports three useful
+JS changes on one PF1007L: cache `Intl.DateTimeFormat`, repaint only changed data, and update
+a minute-resolution clock once a minute. Its timing/CPU figures belong to that contributor's
+unit and workload. These are also useful implementation patterns when building your own site:
+
+- **Cache formatters for the current locale/time zone.** Recreate them when either changes,
+  rather than constructing one for every row or tick. A clock showing only hours/minutes
+  needs formatting on minute changes, time-zone changes and return from sleep. Date text
+  needs updating only when its displayed value changes. For example, with a fixed locale:
+
+  ```js
+  var clockZone, clockFormatter;
+  function updateClock(element, now, timezone) {
+    if (clockZone !== timezone) {
+      clockFormatter = new Intl.DateTimeFormat('en-GB', {
+        timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+      });
+      clockZone = timezone;
+    }
+    var text = clockFormatter.format(now);
+    if (element.textContent !== text) element.textContent = text;
+  }
+  ```
+
+- **Separate data updates from elapsed-time updates.** Keep forecast rows, icons and chart
+  curves in place until new data or a new local day requires rebuilding them. Move the
+  current-time marker and refresh stale-age labels independently. Replacing a container's
+  `innerHTML` recreates its children even when the output looks unchanged; avoid that work
+  on every tick.
+- **Choose an inactive-view policy deliberately.** A simple site can retain fetched data
+  and defer DOM updates while its view or the document is hidden, then render the latest
+  state on return. Keep fetch/cache/backoff independent of visual activity. The demo's
+  `js/app.js` deliberately prebuilds hidden views to improve navigation latency; removing
+  that behavior has a tradeoff, so measure before changing it. Stop unnecessary slideshow
+  timers when their view is inactive.
+- **Keep correctness deadlines independent.** Reducing clock/chart painting does not mean
+  slowing authentication expiry, schedule boundaries or inactivity checks. Recompute from
+  the current wall clock on resume and time correction. Use elapsed/monotonic time where
+  appropriate for inactivity; do not assume that counting timer callbacks measures sleep.
 
 ## Network and HTTPS
 

@@ -2,6 +2,9 @@
 # Builds kiosk/build/homehq.apk without Gradle. Needs JDK 17 + Android build-tools 34 + platform 34:
 #   brew install --cask android-commandlinetools
 #   sdkmanager --sdk_root=$ANDROID_HOME "build-tools;34.0.0" "platforms;android-34"
+# Ubuntu 24.04 (multiverse), with ANDROID_HOME=/usr/lib/android-sdk:
+#   sudo apt install openjdk-17-jdk-headless zip google-android-build-tools-34.0.0-installer \
+#     google-android-platform-34-installer
 # Install on the tablet: adb install -r kiosk/build/homehq.apk
 # Optional: KIOSK_SITE=<dir> bundles a static site, served at http://127.0.0.1:8765/ (README).
 set -euo pipefail

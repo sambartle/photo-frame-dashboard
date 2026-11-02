@@ -104,3 +104,80 @@ and opened Home HQ automatically. HTTPS certificate checks were not bypassed.
 Those are results from this unit and network, not a guarantee of boot timing. Incorrect
 system time can prevent HTTPS from loading even when Wi-Fi is connected. A factory-reset
 setup, prolonged offline boot and full backup restoration remain untested.
+
+## Separate unit follow-up, 18 October 2026: Firefox cookies after cold power
+
+Another owner-operated Classic10 on a macOS host reported the same firmware string,
+`Classic10_A33M187_20250910-1617_V09`, Android 6.0.1/API 23, ARMv7 and 1280x800 display.
+Its shipped WebView `44.0.2403.119` was retained; this trial used **Firefox 143.0.4
+ARMv7**, build `20251003115653`, and a fullscreen web-app shortcut. Root ADB was available
+on Wi-Fi; USB access was not verified on this unit. A verified private backup preceded
+the app trials; firmware restoration remains untested. This is a separate report, not
+additional verification of the USB/WebView-replacement procedure above.
+
+### A loaded page did not mean authentication survived
+
+The dashboard used a read-only display credential in a persistent Secure/HttpOnly cookie.
+A correct-clock Firefox restart retained private-photo access. After cold power removal,
+fullscreen navigation returned, but the owner had to reconnect the display to see photos.
+Read-only cookie metadata showed that a previously future expiry in 2027 had become a date
+in February 1971. Creation/access timestamps were near January 1970; the cookie's path and
+security flags were retained. Cookie values were not extracted for this comparison.
+
+Retained early-boot logs showed Firefox starting near the Unix epoch through
+`androidx.work.impl.background.systemalarm.RescheduleReceiver`, before Android corrected
+the clock. Thus waiting to tap the fullscreen shortcut would not, by itself, prevent the
+already-observed background browser startup. The first live observer sample was after
+time correction; the retained logs, rather than that late sample, established the ordering.
+
+### Version-specific explanation and tested workaround
+
+The installed Firefox build identifies Mozilla release revision
+`08388fb6b18c61dbb3d0baa9bee4e7440b85f671`. In that revision:
+
+- [CookieValidation.cpp](https://hg.mozilla.org/releases/mozilla-release/raw-file/08388fb6b18c61dbb3d0baa9bee4e7440b85f671/netwerk/cookie/CookieValidation.cpp)
+  checks expiry against current wall time and the configured client lifetime cap.
+- [CookiePersistentStorage.cpp](https://hg.mozilla.org/releases/mozilla-release/raw-file/08388fb6b18c61dbb3d0baa9bee4e7440b85f671/netwerk/cookie/CookiePersistentStorage.cpp)
+  repairs an oversized persisted expiry using
+  [CookieCommons.cpp's `MaybeCapExpiry`](https://hg.mozilla.org/releases/mozilla-release/raw-file/08388fb6b18c61dbb3d0baa9bee4e7440b85f671/netwerk/cookie/CookieCommons.cpp).
+- [StaticPrefList.yaml](https://hg.mozilla.org/releases/mozilla-release/raw-file/08388fb6b18c61dbb3d0baa9bee4e7440b85f671/modules/libpref/init/StaticPrefList.yaml)
+  sets `network.cookie.maxageCap` to 34,560,000 seconds (400 days); `0` disables the cap.
+
+This gives a mechanism consistent with a future expiry being clamped relative to a 1970
+clock. The exact cookie-rewrite call path was not traced on the device, so this is not a
+proven diagnosis of every Firefox authentication loss after reboot.
+
+In an owner-approved trial, Firefox was stopped and the dedicated profile received only
+`user_pref("network.cookie.maxageCap", 0);` in `user.js`, with its original app ownership
+and private permissions preserved. After normal relaunch, the same display credential
+worked. One further owner-operated cold cycle again logged early Firefox startup before
+time correction, but retained the future cookie expiry unchanged to the millisecond.
+The owner then returned through the launcher/fullscreen shortcut and confirmed private
+photos worked **without entering the key again**. No server credential lifetime, cookie
+database, certificate validation, system WebView, clock setting or firmware was changed.
+
+This is a **profile-wide policy tradeoff**, not a general setup recommendation: it removes
+Firefox's client lifetime cap for every cookie in that profile. Server-side credential
+expiry, revocation and authorization still apply. The separate
+`network.cookie.fixup_on_db_load` preference was left unchanged. Undo requires restoring
+the previous cap setting in both `user.js` and any override Firefox persisted in `prefs.js`,
+with Firefox stopped and unrelated settings/ownership preserved. If neither contained an
+override originally, remove only the added cap entries and relaunch to restore the default.
+Deleting `user.js` alone can leave the persisted override active. Undo does not repair a
+cookie already clamped into the past; ordinary reauthentication may still be necessary.
+
+### What to check on a similar unit
+
+Check browser/profile initialization as well as page navigation when investigating the
+boot clock. A custom browser shell can wait for a plausible, stable clock before opening
+its persistent profile; delaying only a web request does not establish that the profile
+was untouched earlier. Do not bypass certificate validation or assume that disabling one
+background receiver permanently prevents browser startup.
+
+After a cold cycle, verify time correction, fullscreen return, authenticated content
+without credential re-entry, and a physical maintenance/Settings return separately.
+A successful HTTPS load proves neither cookie persistence nor unattended startup. This
+Firefox trial passed one post-change cold cycle and manual fullscreen return; it does not
+establish a controlled causal comparison, automatic startup, extended stability, another
+firmware's behavior, or firmware recovery. No new device experiment was performed while
+preparing this contribution.

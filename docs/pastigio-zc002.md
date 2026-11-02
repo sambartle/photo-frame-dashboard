@@ -63,7 +63,8 @@ was present but disabled; the key method did not require enabling it.
 
 The key file's ownership, mode and SELinux label were matched to that unit's
 existing userdata metadata. This finding has not been re-tested against stock
-boot on the Pastigio unit recorded here. The boot patch below is a historical
+boot on the first Pastigio unit recorded here; a [third Pastigio unit](#third-pastigio-unit)
+confirmed it with the guarded writer below. The boot patch below is a historical
 tested route, not evidence that those broader changes are required on this build.
 
 PR #73 also verified a full backup through the repository's existing read-only
@@ -387,6 +388,29 @@ capabilities, and the first unit's patched `adbd` may not have this limit.
 
 No HEVC or VP9 decoder. H.264 720p60 plays in hardware.
 
+## Third Pastigio unit
+
+From [#231](https://github.com/wesbos/photo-frame-dashboard/issues/231), macOS, repo at `f1e0820`.
+Same fingerprint as above. The partition starts follow the [SOMY ZC002](#somy-zc002-unit-identity)
+table, not the first Pastigio unit (`/data` at sector 4268032).
+
+- FEL from the FEL stub card, without opening the case.
+- Route U read-only U-Boot (v2025.10) with the base patch, the no-HS patch at 4-bit 26 MHz, START
+  STOP and the null console, CPU at 408 MHz, PMIC init kept. **Builds without PMIC init never
+  enumerated.** `build-uboot.sh` doesn't take extra patches, so a local copy was used.
+- UMS reads dropped within seconds on a port directly on the Mac, and were stable on a dock's USB
+  2.0 port. Only a USB-A to USB-C cable worked.
+- Full backup with `emmc-macos.py backup-resume`, then the
+  [guarded writer](#guarded-userdata-key-writer): 8 ranges, 7,680 bytes, with no Android boot
+  between the backup and the write. The ranges were checked over UMS before and after.
+- First boot: `device`. `su 0` has the same capability limit as the
+  [second unit](#su-0-from-adb-has-no-capabilities).
+- Home HQ works as Home with Frameo disabled (`pm disable-user`), and survived a reboot.
+
+Gaps it found, not yet fixed in the repo: the generated `write-data.cmd` and `restore-data.cmd`
+have no `nulldev` guard (this unit's build needed one; it was added by hand), and
+`emmc-macos.py verify` can't check a data plan (a one-off read-only check was used).
+
 ## What remains untested or unpublished
 
 - On the first Pastigio unit: the repository's complete PF1007L Route U / Route S, and
@@ -440,6 +464,11 @@ your device's own files — never the backup itself):
 python3 -I scripts/a33-uboot/data-patch-prepare.py \
   data-partition-pristine.img data-partition-edited.img <data-partition-start-sector>
 ```
+
+To skip extracting `/data` (about 29 GB), edit an APFS clone (`cp -c`) of the whole backup with
+`debugfs -w 'clone.img?offset=<data start sector × 512>'`, then run `data-patch-prepare.py
+backups/a33-emmc-full.img clone.img 0`. Stop if any range it prints starts before the `/data`
+start sector ([#231](https://github.com/wesbos/photo-frame-dashboard/issues/231)).
 
 This only reads your two local images. It writes `diagnostics/a33-data-patch/`:
 the changed byte ranges (`range-NN.orig`/`.new`), `plan.json`, and

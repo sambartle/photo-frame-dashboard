@@ -5,6 +5,9 @@ ADB shows the same RK3326 board layout as the [Akimart ZN-DP1002](akimart-zn-dp1
 8.1 Go, logical NAND and the same partition map. The firmware branding and the boot image differ.
 Everything from that page applies, but check the build strings below first.
 
+The same About screen also ships on a **15.6-inch** build with different firmware and ports. See
+[Second unit](#second-unit-156-inch-build-2026-10-21-macos-and-linux).
+
 End result: Home HQ is the Home app and boots into the dashboard, its floating Back and Dashboard
 buttons work, and Frameo plus both vendor updaters are disabled for user 0. A verified logical NAND
 backup was taken first. No flash write, system remount or WebView swap was needed. Everything
@@ -96,3 +99,65 @@ reports the same on another unit of this board. Check before rebooting:
 ```sh
 adb shell "su 0 grep net.frameo.frame /data/system/users/0/package-restrictions.xml"
 ```
+
+## Second unit: 15.6-inch build (2026-10-21, macOS and Linux)
+
+A second owner's frame shows the same About screen, `AMABOO` / `GBZK-Y1000`, but is a 15.6-inch
+build, bought on Amazon (listing not recorded). Hosts: Linux over USB for first access, then
+macOS 26 on Apple silicon over Wi-Fi ADB (platform-tools 35.0.2).
+
+| Field | This unit | First unit (above) |
+| --- | --- | --- |
+| Firmware | `RAM_S101_15.6_20260314` | `RAM_S101_20251229` |
+| Fingerprint build | `OC/095436` | `OC/014151` |
+| Display | 1920×1080, 213 dpi | 1280×800, 160 dpi |
+| Boot partition SHA-256 (32 MiB) | `9628624b04b574b65c10672889b19c17331da6b514dff54f1d0f969a4536020f` | `96828788…01c62813` |
+| Ports | USB-C, USB-A (host) and a DC jack | USB-C and a DC jack |
+| Frameo out of the box | v1.29.14 | v1.29.13 |
+
+Brand `bnd`, model `RAM`, RK3326, Android 8.1 (security patch 2020-06-05), `ro.debuggable=1`,
+SELinux permissive, WebView 106.0.5249.126, the shipped `su` (`su 0` and `su -c`) and `adb root`
+all match the first unit. The logical NAND has the same size and the same partition names, starts
+and sizes, including `userdata` at 6,669,312 with 53,885,888 sectors.
+
+- **Cables:** USB-C to USB-C from a Mac never enumerated, in normal boot or with power held at
+  plug-in. The same cable worked with an iPad. A USB-A to USB-C cable from a Linux PC's USB-A port
+  enumerated at once as `2207:0006` (product `RAM`). ADB then needed a udev rule for vendor `2207`
+  (`no permissions` before it) and the on-screen authorization prompt.
+- **Wi-Fi ADB:** with USB ADB authorized, `adb tcpip 5555` opened network ADB, and the Mac
+  connected after accepting its own key on the panel. To keep it across reboots,
+  `setprop persist.internet.adb.enable 1` (as root) uses the vendor's hook in `init.rk30board.rc`.
+  ADB came back on 5555 about 46 s after each of two reboots. Anyone with an authorized key
+  gets root over the network, so keep the frame on a trusted network.
+- **Before Wi-Fi:** both updaters were disabled over USB before the frame first joined Wi-Fi.
+  Frameo was disabled about an hour later and had not updated itself by then.
+- **SystemUI:** `com.android.systemui` was enabled before the first reboot and disabled after it,
+  with Frameo still enabled. It stayed disabled after Frameo was disabled.
+- **Backup over Wi-Fi:** the same 16 regions as the first unit, verified against on-device
+  `sha256sum` and byte counts, with a gzip readback and no `0xCC` blocks. About 2 MB/s, roughly
+  35 minutes. Three things broke the first tries:
+  - `adb exec-out "su 0 dd …"` corrupts binary output, the same 4,197-byte result for a 4 KiB read
+    reported for the [21.5" SSA frame](ssa-frame-21inch-rk3326.md#verified-firmware-backup) and
+    the [YENOCK](yenock-zn-dp1501.md#root-and-binary-reads). `adb root`, then plain
+    `adb exec-out dd …`, was byte-exact.
+  - `dd if=/dev/block/rknand0 skip=…` failed with `Invalid argument` for every offset past 2 GiB.
+    Reading each partition from its own node (`/dev/block/rknand0p12` and so on) from offset 0
+    worked. The regions before that offset read fine from `rknand0`.
+  - Unplugging the USB cable from the Linux PC during the Wi-Fi backup logged `adbd: USB
+    disconnect` and dropped the Wi-Fi ADB session too, cutting the stream short. `adb exec-out`
+    still exited 0, so check byte counts rather than exit codes.
+- **Setup:** the same steps as [Setup performed](#setup-performed): updaters and Frameo disabled,
+  Home HQ as HOME through its `.Home` alias, the navigation service with `WRITE_SECURE_SETTINGS`.
+  Rootless Pixel Launcher 3.9.1 (the F-Droid APK pinned in
+  [biuframe-setup-guide.md](biuframe-setup-guide.md)) was installed behind it. The owner checked
+  the two-finger menu, Android Settings → Apps and the floating Dashboard button on the panel
+  before Frameo was disabled. While Frameo was still enabled, **Open launcher** opened Frameo,
+  because it is the first other Home app; after the disable it opened the Pixel launcher.
+  Frameo's `enabled="3"` was on disk before the reboot, and it stayed disabled after.
+- **Dashboard:** the 1280×800 dashboard showed with black bars at the sides on the 16:9 panel.
+- **Microphone:** none found. The RK817 codec exposes a capture device and the audio policy lists
+  a built-in mic, but `android.hardware.microphone` is not declared. With
+  `tinymix 'Capture MIC Path' 'Main Mic'`, an 8 s `tinycap` recording during claps and speech stayed
+  flat at −67 dBFS (peak −50.6 dBFS). No mic hole was visible.
+- **Time zone:** the frame shipped on `America/New_York`. As root,
+  `service call alarm 3 s16 <zone>` changed it.

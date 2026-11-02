@@ -157,6 +157,14 @@ Use these steps only on a frame you own or have permission to administer. Python
 
 6. Reconnect Wi-Fi or reboot the frame to trigger a fresh AiMOR connection. Re-read its IP afterward. If it changed, restart the command listener with the new verified address and update the DNS allowlist. For a sudo DNS process, an optional `--clients-file diagnostics/aimor-network-adb/clients.json` reloads a small JSON array of verified addresses on each request; replace the file atomically rather than adding an entire subnet. Explicit `--allow-client` entries remain allowed, so avoid retaining a stale frame there when using a reloadable file.
 
+   A reconnect is only needed to trigger the first login. On one January `20260113` unit the
+   reconnect raced `adbd`: `runtime_adb_command_sent` appeared, but port 5555 never opened after
+   the toggle. Re-arming `server.py` for the frame's new address and letting AiMOR's own retry loop
+   reconnect — without touching Wi-Fi — delivered the command again and ADB came up. After the
+   command is sent, leave Wi-Fi alone until `adb connect` succeeds or fails. The same unit reached
+   the listener through a router local-DNS record (as in #117) instead of `dns.py`; the router is
+   the frame's DNS server through DHCP, so no per-frame DNS setting was needed.
+
 7. After the helper reports transmission, verify ADB and identity:
 
    ```sh

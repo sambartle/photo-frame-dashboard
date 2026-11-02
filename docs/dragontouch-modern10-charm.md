@@ -234,3 +234,86 @@ read "free" all day, while weather and news (which involve no date) looked perfe
 `adb shell uptime` reporting **idle time longer than uptime** was the tell.
 
 Still untested on this unit: factory-reset behaviour, and firmware restore.
+
+## Follow-up, 2026-10-19: USB-C root ADB from Windows
+
+Second unit, same firmware string as the report above
+(`Modern10 charm_A33MAU_202605151735_4.0_V01`, fingerprint
+`joy/astar_ococci/astar-ococci:6.0.1/MOB30R/20260515:user/test-keys`, WebView
+`44.0.2403.119`). Host: Windows 11, build 26200, with Google platform-tools installed by winget.
+The identity checks matched before anything was installed.
+
+### USB-C enumerates
+
+The report above connected a USB-A port to a Mac with a USB-A-to-USB-C cable and saw no USB
+device. On this unit the owner plugged the USB-C connector into Windows, and the frame
+enumerated immediately. The case was not opened, so the host receptacle and the gadget
+receptacle were not identified separately.
+
+| Item | Observed |
+| --- | --- |
+| USB ID | `1f3a:1007` (Allwinner). Windows showed a USB composite device, an Android interface, and a WPD device named Modern10 charm |
+| `adb devices -l` | `device`, `product:astar_ococci`, `model:Modern10_charm`, at the same time as the Wi-Fi connection on port 5555 |
+| Shell | `uid=0(root)`, SELinux context `u:r:su:s0`, no authorization prompt |
+
+No `adb tcpip`, developer-menu change, or boot patch was used.
+
+A streamed BusyBox `dd` of `/dev/block/mmcblk0` moved about 7.1 MB/s over USB and about 0.9 MB/s
+over Wi-Fi. The Wi-Fi copy was stopped after a few percent and repeated over USB. The user area
+was 15,758,000,128 bytes, the same size as the unit above. Gzip readback matched the streamed
+SHA-256. Fresh reads matched boot0, boot1, the first 1 MiB of the user area, bootloader, env,
+boot, recovery (the partition device, and a seek to that range on `mmcblk0`), and a 16 MiB
+sample starting 128 MiB into system. None of the 240,448 blocks of 64 KiB in the user area were
+uniform `0xCC`. The whole-disk hash is not published.
+
+### Partition map from this unit
+
+`/sys/block/mmcblk0/mmcblk0p*/start` and `size` are 512-byte sectors. Names come from
+`/dev/block/by-name` on this unit. Another model's offsets are not a substitute.
+
+| Partition | Name | Start sector | Size, sectors |
+| --- | --- | ---: | ---: |
+| p3 | (no `by-name` link) | 1 | 2 |
+| p2 | bootloader | 73728 | 65536 |
+| p5 | env | 139264 | 32768 |
+| p6 | boot | 172032 | 32768 |
+| p7 | system | 204800 | 4194304 |
+| p8 | misc | 4399104 | 32768 |
+| p9 | recovery | 4431872 | 65536 |
+| p10 | cache | 4497408 | 1572864 |
+| p11 | metadata | 6070272 | 32768 |
+| p12 | private | 6103040 | 32768 |
+| p13 | frp | 6135808 | 1024 |
+| p14 | empty | 6136832 | 31744 |
+| p15 | alog | 6168576 | 163840 |
+| p16 | media_data | 6332416 | 32768 |
+| p1 | UDISK | 6365184 | 24412160 |
+
+`/proc/partitions` reports the user area as 15,386,672 one-kilobyte blocks. `mmcblk0boot0` and
+`mmcblk0boot1` are each 4,096 one-kilobyte blocks (4,194,304 bytes).
+
+boot1 was entirely zeros at that size, and a second full read matched. BusyBox on the device is
+v1.18.3. Stock toybox has no `sha256sum`. BusyBox `dd bs=1048576 skip=2164 count=32` read
+recovery from `mmcblk0` past 2 GiB and matched a read of `/dev/block/by-name/recovery`.
+
+### Windows `adb exec-out` and `dd`
+
+`adb exec-out busybox dd if=/dev/block/mmcblk0 bs=512 count=1` returned 543 bytes: the 512 data
+bytes plus `dd`'s status text. The local stderr pipe was empty, so the status arrived on the
+data stream. Redirecting on the device kept the stream exact:
+
+```sh
+adb exec-out sh -c 'busybox dd if=/dev/block/mmcblk0 bs=1048576 2>/dev/null'
+```
+
+A 65,536-byte read of `/dev/block/by-name/boot` contained 552 `0x0a` bytes and was still exactly
+65,536 bytes, so this Windows `adb` did not expand newlines. The first eight bytes were
+`ANDROID!`.
+
+### Clock
+
+About 28 minutes after boot, `uptime` reported idle time longer than uptime, the tell from the
+note above, while `date` already showed 19 October 2026. A jump of years was not seen in this
+session.
+
+Not tested here: whether USB ADB survives a reboot, factory reset, and firmware restore.

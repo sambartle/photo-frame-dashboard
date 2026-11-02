@@ -105,6 +105,18 @@ volume in both directions fits a relay or tunnel better than a status check, but
 Whatever it is, a root program can read everything on the frame, so it was removed before any
 family photos were put on it.
 
+A separate analysis of the same file ([#205](https://github.com/wesbos/photo-frame-dashboard/issues/205))
+found more. Things to check for on your own frame:
+
+- `/system/bin/iotv` SHA-256 `7d2819105d5b793064f1872a31b85af1f50244fe9f5ca4955b5a72ba0f3cde4e`;
+  `/system/bin/run_iotv.sh` SHA-256 `f2adb1e0939c351cf4c284e644b55fa21c23ca893e8ef512451d2a65718cc3a8`.
+- It resolves the lookalike name `android.google.nodedance.io` (not a Google domain) through public
+  resolvers (8.8.8.8, 1.1.1.1, OpenDNS), bypassing the router's DNS.
+- It registers with one server, then is pointed at a session server, so the address can change.
+- Reported, not confirmed: the unpacked program looks like a relay or proxy client. The lack of an
+  obvious command-execution path doesn't rule out other abuse. Don't run the vendor binary on a
+  machine with network access.
+
 **Pitfall:** this build's `pidof` prints **every** process ID when nothing matches. A first attempt,
 `kill $(pidof iotv)`, also stopped the SuperSU daemon and root was gone until a reboot (`daemonsu` is
 started by `init`, not by `iotv`). Kill by the PID from `ps` instead.

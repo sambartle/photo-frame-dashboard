@@ -18,6 +18,7 @@ would need the SD card to get back in. `install.sh check` warns when ADB is over
 | Problem (observed) | Cause | Fix | Setting |
 | --- | --- | --- | --- |
 | A new Wi-Fi MAC at each boot, so the DHCP address and per-device firewall rules change | The AIC8800 has no stored MAC; the driver picks a random `88:00:33:77:xx:xx` at each load | A `wpa_supplicant` wrapper sets your MAC before Wi-Fi associates; a loop corrects it if the driver changes it later | `MAC` |
+| Wi-Fi stays off until a power cycle: switched on, but no scan and no connection | A MAC change (the `MAC` loop in the row above) or anything else that takes `wlan0` down while Android starts the driver: `WifiStateMachine` logs `Failed to start driver after 2` and never retries; `wpa_cli status` shows `INTERFACE_DISABLED` | After 30 s in that state (or with no supplicant answering), toggle Wi-Fi as Settings would; if it stays dead, retry after 60 s, doubling to every 10 min. Skipped while `frame-nowifi` exists | always on |
 | After a power cut the clock is 1969 and every HTTPS page fails ("date invalid") | No battery-backed clock. Android 6's SNTP client accepted a rate-limit reply (Kiss-o'-Death) from the router as the time, then waited 24 h | Restore the last saved time early in boot, then SNTP every 2 s until the server answers; save the time every 10 min | `NTP_SERVER` |
 | The screen goes dark or freezes white about 30 s into boot, on most boots | The AIC8800 powers up while boot is at its busiest. The frame has no battery. The kernel log ends during the Wi-Fi firmware load or the first scan | Hide the driver from Android's boot-time load, then start Wi-Fi a few seconds after boot completes | `WIFI_DEFER` |
 | (same) | The AXP223 starts with a 500 mA input limit (register `0x30 = 0x21`) and the kernel lifts it only at ~31 s | Write `0x63` (no limit) early in boot and keep it there. **Off by default:** only with a charger that supplies more than 500 mA, since frames on laptop ports browned out | `POWER_FIX` |
@@ -45,14 +46,21 @@ October 2026, on a 2 A wall supply:
 - Observed: one freeze on the wall supply during development had no log, and did not happen again
   in more than 60 later boots. Its cause is unknown.
 - Observed on other units, one or a few boots each: `check`, `apply` and `verify` passed on January
-  `20260113` (#137, #164, #172, #179) and April `20260416`
-  ([report](pf1007l-macos-20260416-report.md#boot-fixes)), with `WIFI_DEFER=1` and `POWER_FIX=0`.
-  Wi-Fi started at 39.9 to 44 s uptime. Repeated and power-cut boots were not tested on most of them.
+  `20260113` (#137, #164, #172, #179), April `20260416`
+  ([macOS report](pf1007l-macos-20260416-report.md#boot-fixes),
+  [Linux report](pf1007l-linux-20260416-hotspot-report.md#boot-fixes)) and May `20260519`
+  ([#204](pf1007l-aimor-20260519-windows-adb-on-report.md#setup-that-worked) from Windows Git Bash,
+  `check` and `apply` only; [#227](pf1007l-macos-20260519-12mhz-full-setup-report.md), Wi-Fi at 42.6 s;
+  #240), with `WIFI_DEFER=1` and `POWER_FIX=0`.
+  Wi-Fi started at 39.9 to 44 s uptime. Repeated and power-cut boots were not tested on most of them;
+  the Linux `20260416` unit also reached the page by itself on a wall charger, and again after an
+  unplug and replug.
 - Observed before the fixes, the same freeze on other units: a January unit went dark about 30 s
   into a boot from a laptop port (#137); a January unit on a 5 W USB-A charger stayed black after
   the boot logo (#164); an April unit boot-looped on a Mac port when Wi-Fi started (#187).
-- Observed: a TP-Link Deco did not answer NTP (#190); `NTP_SERVER=time.google.com` worked there
-  and on #137, #164 and #172.
+- Observed: a TP-Link Deco (#190) and an Orange Livebox 6
+  ([Linux hotspot report](pf1007l-linux-20260416-hotspot-report.md#boot-fixes)) did not answer NTP;
+  `NTP_SERVER=time.google.com` worked there and on #137, #164 and #172.
 - Guess: the Wi-Fi start freeze is a power problem (current spike with no battery), not a driver
   bug. The kernel log ends at different points of the Wi-Fi start, and the frame survived the
   same start when it ran after boot.

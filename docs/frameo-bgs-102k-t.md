@@ -185,6 +185,14 @@ never see the "Allow USB debugging?" prompt, so that key may be the only way bac
 | Screen always on | `settings put system screen_off_timeout 2147483647` | `settings put system screen_off_timeout 60000` (or the value read before) |
 | Frameo off | `su 0 pm disable net.frameo.frame`, after the owner checked **by hand on the panel** that the Home app reaches Android Settings → Apps (README rule 9). Then the Home chooser once more (the set of Home apps changed) | `su 0 pm enable net.frameo.frame` |
 
+Firefox 143.0.4 shows **Add app to Home screen** when the manifest has
+`"display": "fullscreen"` and PNG icons at 192 and 512. Opening that shortcut from a
+stopped Firefox starts `ExternalAppBrowserActivity` with no toolbar. While the icons are
+missing, the menu stays **Add to Home screen**, the shortcut category is
+`mozilla.components.pwa.category.SHORTCUT`, and it resumes `HomeActivity` with the toolbar.
+Checked on a Modern10 Charm with the build pinned in
+[biuframe-setup-guide.md](biuframe-setup-guide.md).
+
 Result, verified after `adb reboot` with no input: the dashboard is full screen in Firefox about
 **151 s** after the reboot command. The time zone stayed set, Frameo and Adups stayed
 disabled, and `screen_off_timeout` is `2147483647`, so the screen stays on.

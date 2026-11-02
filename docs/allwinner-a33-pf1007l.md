@@ -286,7 +286,9 @@ in these commands prevents a `dd` status footer from contaminating the image.
 
 To read the whole eMMC in chunks (`/dev/block/mmcblk0` with `skip=`), use
 `/sbin/busybox dd`. The stock `dd` returned **0 bytes, with no error**, for every chunk
-that starts at 2 GiB or later (firmware 20260529, observed; also `20260416`, #190). `busybox dd` read those
+that starts at 2 GiB or later (firmware 20260529, observed; also `20260416`, #190, and
+January `20260113`, one unit with the larger eMMC, where the failure began exactly at the
+2,147,483,648-byte boundary of a 512 MiB chunking). `busybox dd` read those
 chunks, and gave the same bytes as the stock `dd` below 2 GiB. Check each chunk's size,
 not only its hash: an empty chunk has the same MD5 on the frame and on the host.
 
@@ -734,7 +736,7 @@ advertised interfaces:
 | AW. ambient temperature | Type 13 advertised; no samples or active client. | A working ambient sensor. |
 | SoC thermal | `sunxi-therm` reports raw 43 in thermal and hwmon nodes. | Scaling and calibration; distinct from ambient temperature. |
 | Silead touch | `gslX680new` at I2C `0-0040`; multitouch advertised. Taps and swipes worked. | Reliable close two-finger gestures. |
-| Audio | `SUNXI-CODEC` exposes playback/capture; speaker playback works. | Fitted microphone or working capture. |
+| Audio | `SUNXI-CODEC` exposes playback/capture; speaker playback works. On a `20260519` unit a speaker tone did not reach capture on any codec path ([report](pf1007l-aimor-20260519-windows-adb-on-report.md#microphone)). | A fitted microphone. |
 | Camera | Camera HAL present; camera service reports zero devices. | Physical inspection. |
 | Bluetooth | Feature flags present; no sysfs/rfkill controller, Bluetooth app or connected framework service. | Working Android stack or fitted radio; Linux BLE support is reported below on a different unit (the Omarchy SD build). |
 | Power | USB online. Battery node reports present/charging with zero voltage/capacity. Reconnecting USB power caused a cold boot. | A usable battery. |

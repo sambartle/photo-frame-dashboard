@@ -24,7 +24,7 @@ frame, which board it has, and where to start.
 
 ## Community builds
 
-30 people have shared their hacked frames in [Community builds](docs/community-builds.md): LCARS
+More than 70 people have shared their hacked frames in [Community builds](docs/community-builds.md): LCARS
 interfaces, retro weather channels, chess puzzles, Linux on a frame, family dashboards and more.
 
 <a href="docs/community-builds.md"><img src="docs/images/community/JesseWaites-11.jpg" height="90" alt="Star Trek LCARS interface" title="Star Trek LCARS interface"></a>

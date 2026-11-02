@@ -184,6 +184,14 @@ sync && mount -o remount,ro /system
 After a reboot, the on-device MD5s match the AOSP files, and there were no SSL errors in the kiosk log.
 The photo tile loads. Undo: swap `cacerts.stock` back into place.
 
+> **eMudhra (October 2026).** Eight eMudhra intermediate CAs had weak keys. Browsers block them
+> through updates that a frame's WebView never gets. They chain to `75680d2e.0` (AAA Certificate
+> Services, in stock Android 6 stores) and `b74d2bd5.0` (emSign ECC Root CA - G3, in newer AOSP
+> stores). Distrust them without a `/system` write. As root, copy each one present into
+> `/data/misc/user/0/cacerts-removed/` (folder `system:system` 0755, files 0644), then restart the
+> kiosk. To undo, delete the copies. Tested on two PF1007L units
+> ([#229](https://github.com/wesbos/photo-frame-dashboard/issues/229)).
+
 ### Removing Frameo and vendor apps
 
 Each file was copied to the host before deletion, and its MD5 on the device matched the copy:

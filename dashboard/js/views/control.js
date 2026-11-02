@@ -241,7 +241,7 @@
         });
         knob.addEventListener('pointermove', function (e) {
           if (sx == null) return;
-          var k = App.$('#stage').getBoundingClientRect().width / 1280;
+          var k = App.$('#stage').getBoundingClientRect().height / 800;
           var x = Math.max(0, Math.min(max / k, (e.clientX - sx) / k));
           knob.style.transform = 'translateX(' + x + 'px)';
           fill.style.width = (x + 76) + 'px';

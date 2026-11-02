@@ -14,7 +14,10 @@ adb_() { adb ${ADB_SERIAL:+-s "$ADB_SERIAL"} "$@"; }
 
 if [ $# -eq 0 ]; then
   # Root reads the app's private prefs; prints nothing if no URL was ever saved (kiosk default).
-  adb_ shell "su -c 'cat /data/data/$PKG/shared_prefs/*.xml'" | tr -d '\r' | sed -n 's:.*<string name="url">\(.*\)</string>.*:\1:p'
+  # adb shell is already root on some frames, and AOSP su (PF1007L) rejects -c: use su 0 there.
+  read_prefs="cat /data/data/$PKG/shared_prefs/*.xml"
+  adb_ shell "if id | grep -q '^uid=0('; then $read_prefs; else su -c '$read_prefs' 2>/dev/null || su 0 sh -c '$read_prefs'; fi" |
+    tr -d '\r' | sed -n 's:.*<string name="url">\(.*\)</string>.*:\1:p'
   exit 0
 fi
 
