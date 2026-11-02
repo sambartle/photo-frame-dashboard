@@ -80,7 +80,7 @@ public class MainActivity extends Activity {
   static final String PREFS = "kiosk";
   static final String PREF_URL = "url";
   static final String PREF_SCREENOFF = "screenoff";
-  static final String PREF_ADB_FROM = "adbfrom";   // the subnet allowed to reach wireless ADB, e.g. 192.168.10.0/24
+  static final String PREF_ADB_FROM = "adbfrom";   // the subnet allowed to reach wireless ADB, e.g. 192.168.1.0/24
   static final String PREF_ADB_UNTIL = "adbuntil"; // when the wireless ADB window ends (wall clock, ms)
   static final long ADB_WINDOW_MS = 5 * 60 * 1000L;
   static final String ADB_CHAIN = "homehq_adb";
@@ -237,7 +237,7 @@ public class MainActivity extends Activity {
   // Both frames run root ADB with no key check (ro.adb.secure=0), so ADB on the network is an open root
   // shell for whoever can reach port 5555. It is therefore off by default, switched on only from the
   // display controls (someone at the frame), for 5 minutes, and only with a subnet saved
-  // (--es adbfrom 192.168.10.0/24): it is reachable only from that subnet, the firewall rules go in
+  // (--es adbfrom 192.168.1.0/24): it is reachable only from that subnet, the firewall rules go in
   // first, and if they can't be made it stays closed. With no subnet saved it refuses to start; opening
   // it to the whole network has to be asked for (--es adbfrom any). It's the same as `adb tcpip 5555`
   // (service.adb.tcp.port, restart adbd), done through su; the property is volatile, so a reboot closes it too.
@@ -280,7 +280,7 @@ public class MainActivity extends Activity {
     return f.equals("any") || validCidr(f) ? f : "";
   }
 
-  /** "--es adbfrom 192.168.10.0/24" saves the allowed subnet; "any" allows the whole network; "none" clears it. */
+  /** "--es adbfrom 192.168.1.0/24" saves the allowed subnet; "any" allows the whole network; "none" clears it. */
   private void applyAdbFromFlag(Intent intent) {
     String f = intent == null ? null : intent.getStringExtra(PREF_ADB_FROM);
     if (f == null) return;

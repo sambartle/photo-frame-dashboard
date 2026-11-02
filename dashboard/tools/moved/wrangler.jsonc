@@ -7,5 +7,5 @@
   "compatibility_date": "2026-09-30",
   "workers_dev": true,
   "preview_urls": false,
-  "vars": { "NEW_ORIGIN": "https://homehq.sambartle.co.uk" }
+  "vars": { "NEW_ORIGIN": "https://dashboard.example.com" }
 }

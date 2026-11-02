@@ -154,7 +154,7 @@
 
   // ------------------------------------------------------------ bins
   // A UK wheelie bin side-on: tapered body, hinged lid with a front lip, handle at the back, wheel.
-  // t is a bins.types entry: color for the body, and lid for a different lid (Rotherham's pink lid).
+  // t is a bins.types entry: color for the body, and lid for a different lid (a council's pink lid).
   App.binIcon = function (t, size) {
     var body = t.color || '#7A756B', lid = t.lid || body;
     return '<svg class="bin" width="' + size + '" height="' + Math.round(size * 32 / 26) + '" viewBox="0 0 26 32" aria-hidden="true">' +

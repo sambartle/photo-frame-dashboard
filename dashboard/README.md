@@ -37,7 +37,9 @@ npx wrangler login
    ```
 
    Paste the `database_id` that the first command prints into `wrangler.jsonc`, replacing
-   `REPLACE_WITH_YOUR_D1_ID`. Then create the tables:
+   `REPLACE_WITH_YOUR_D1_ID` (and your domain in `routes`). If you commit your own copy of the repo,
+   keep the real values in `wrangler.local.jsonc` instead (gitignored; `npm run deploy` and
+   `db:migrate` use it when it exists) so they stay out of it. Then create the tables:
 
    ```bash
    npm run db:migrate

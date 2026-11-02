@@ -126,7 +126,7 @@ frame, limited to 5 minutes, and **it won't start at all until a subnet is saved
 the whole network). Save the subnet your computer is on, once per frame over USB:
 
 ```sh
-adb shell am start -n com.wesbos.homehq/.MainActivity --es adbfrom 192.168.10.0/24    # none removes it
+adb shell am start -n com.wesbos.homehq/.MainActivity --es adbfrom 192.168.1.0/24    # none removes it
 ```
 
 With the subnet saved, the kiosk first adds firewall rules (an `iptables` chain `homehq_adb`: accept that

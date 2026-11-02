@@ -9,3 +9,5 @@ secrets.json
 # Old names, kept so a leftover copy is never committed
 family.json
 calendars.json
+# Real domain and D1 id: a copy of wrangler.jsonc with your values; tools/wr.mjs uses it when it exists.
+wrangler.local.jsonc

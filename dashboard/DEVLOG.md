@@ -45,9 +45,10 @@ newest first, with the commit each version shipped in.
 
 - **One Worker serves everything.** `wrangler.jsonc` binds `ASSETS` (the Vite output), `DB` (D1),
   `PHOTOS` (R2) and `ALERTS` (the `AlertHub` Durable Object), and runs `scheduled()` every 5
-  minutes. It's on the custom domain `homehq.sambartle.co.uk`; `workers_dev` is off. Before any
-  upstream PR, replace the personal values in `wrangler.jsonc` and `tools/moved/wrangler.jsonc`
-  with placeholders.
+  minutes. It's on a custom domain; `workers_dev` is off. The tracked `wrangler.jsonc` and
+  `tools/moved/wrangler.jsonc` carry placeholders; the real domain and D1 id live in a gitignored copy,
+  `wrangler.local.jsonc`, which `tools/wr.mjs` (behind `npm run deploy`, `db:migrate` and `dev:api`)
+  uses when it exists. A bare `wrangler deploy` would use the placeholders.
 - **Config split.** `settings.json` (gitignored) is imported into the Worker at build time, so a
   settings change needs `npm run deploy`. `secrets.json` (gitignored, mode 600) is uploaded with
   `wrangler secret bulk` by `tools/secrets.mjs`, so a secret change needs no deploy. The browser
@@ -72,7 +73,7 @@ newest first, with the commit each version shipped in.
 - **Notes (1.14).** `notes` table; a note for one person is also pushed to their phone through
   `people[].notify`. Cleared notes keep their row so Undo works.
 - **Bins (1.3).** Collection dates are computed from the council's rotation in `settings.json`
-  (`bins.every`, `bins.moved`); Rotherham has no usable lookup API. "They're out" is stored as
+  (`bins.every`, `bins.moved`); the council has no usable lookup API. "They're out" is stored as
   `bins-out`. Bank-holiday moves go in `bins.moved`.
 - **Share target (1.5).** `public/m.webmanifest` + `public/share-sw.js` put the phone page in
   Android's share menu; the images go to the upload page.
@@ -208,7 +209,7 @@ stand-in `caches.default`, `fetch` and D1, and use `node --cpu-prof`. Add
   - **Doorbell off switch.** `home.alerts.doorbell.off: true` drops the doorbell when settings load,
     so the alert, the camera takeover and the generated Home Assistant YAML all ignore it while its
     settings stay. Added while the new Blink doorbell wasn't ringing in Home Assistant.
-- **Camera snapshots (1.22.1).** The Cloudflare log showed `/api/ha/camera?id=camera.driveway`
+- **Camera snapshots (1.22.1).** The Cloudflare log showed `/api/ha/camera?id=camera.<name>`
   failing every 20 s: status 500 after 10.03 s wall, 0 ms CPU, outcome "ok". That is Home
   Assistant's own 10 s `camera_proxy` timeout (the camera asleep or busy), passed through by the
   Worker, and the frame showed a broken-image icon. `cameraImage` now fetches with an 8 s timeout,
@@ -247,7 +248,7 @@ stand-in `caches.default`, `fetch` and D1, and use `node --cpu-prof`. Add
   WebCrypto (`googleToken`), trades it for an access token, and writes to calendars shared with it
   ("Make changes to events"). Calendar ids are parsed from the iCal URLs. The event row keeps
   `gcal`/`gid`; `getCalendar` hides the local copy once the feed contains `<gid>@google.com`, so
-  nothing shows twice. Our Google Workspace organisation enforces
+  nothing shows twice. A Google Workspace organisation can enforce
   `iam.disableServiceAccountKeyCreation`; the project needed a policy override to make the key,
   then was set back to inherit.
 
@@ -311,7 +312,7 @@ frame can differ. Keys: `hq-night` (Dim, Bright, Sleep, Wake, Sleep on/off), `hq
   same as `adb tcpip 5555` through `su` (`setprop service.adb.tcp.port 5555; stop adbd; start adbd`),
   closed again with port `0`. Both frames run root ADB with `ro.adb.secure=0` (no key check), so it is
   off by default, only started at the frame, and limited to 5 minutes. **From 1.4.1 it refuses to start
-  until a subnet is saved** (`--es adbfrom 192.168.10.0/24`, validated as an IPv4 CIDR because it goes into
+  until a subnet is saved** (`--es adbfrom 192.168.1.0/24`, validated as an IPv4 CIDR because it goes into
   a root command; `any` opens it to the network on purpose, `none` removes the value); 1.4 opened to the
   whole network without one. With the subnet saved the kiosk first creates an `iptables` chain `homehq_adb` (accept the subnet, drop the rest, jumped to from
   INPUT for tcp/5555) and an `ip6tables` DROP, and **fails closed**: if the rules can't be made, ADB
@@ -322,8 +323,8 @@ frame can differ. Keys: `hq-night` (Dim, Bright, Sleep, Wake, Sleep on/off), `hq
   network port was on, so a USB session isn't dropped for nothing. The page shows the state, a
   countdown and `adb connect <ip>:5555` (the kiosk reports `adbIp` from `WifiManager`), and hides the
   section on kiosks without `adbLeft`. Tried by the owner on 2026-10-26 on both frames: 1.4 installed over USB,
-  then the same build installed over Wi-Fi with `deploy-wifi.sh` (the C-2 at 192.168.3.159, the PF1007L at
-  192.168.3.216, a different subnet from the computer at 192.168.10.x); both worked. On the PF1007L the lock
+  then the same build installed over Wi-Fi with `deploy-wifi.sh` (both frames, on a different subnet from the
+  computer); both worked. On the PF1007L the lock
   was read back afterwards (saved, window closed, no firewall rules left).
 - **Deploy scripts (private, `frames/`).** `deploy-usb.sh` (the old `deploy.sh`, with a guard that
   refuses a network address) and `deploy-wifi.sh <address>`, a wrapper: it tests TCP 5555 first (a
@@ -431,7 +432,7 @@ Dates are 2026; the commit is the one the version shipped in (a commit can hold 
 | 1.8.3 / 1.8.1 | 162bf84, fcf09c7 | 20 Oct | Add-event date and time pickers; 24 h calendar grid opening at 6 AM |
 | 1.8 | 476d07d | 20 Oct | Frame events written to Google Calendar (service account); migration 0002 |
 | 1.7 | 50e99d7 | 20 Oct | Live Google drive times for leave-by, `Walk:`, 300/day cap |
-| (rename) | 3589960 | 20 Oct | Worker renamed `home-hq` at homehq.sambartle.co.uk; `tools/moved` redirect (the old Worker is deleted) |
+| (rename) | 3589960 | 20 Oct | Worker renamed `home-hq` on its custom domain; `tools/moved` redirect (the old Worker is deleted) |
 | (config) | d616ca2 | 20 Oct | `settings.json` + `secrets.json` replace `family.json` + `calendars.json` |
 | 1.6 | 3002512 | 20 Oct | Frame-offline phone notifications; tidier frame list |
 | 1.5 | f25f2a5 | 19 Oct | Android share target for photos |
@@ -447,7 +448,7 @@ Dates are 2026; the commit is the one the version shipped in (a commit can hold 
 - Three "Uncaught Exception" events in the same chart have not been identified (Cloudflare's Logs,
   filtered to errors, will name the path and message).
 - The driveway camera sometimes can't produce a snapshot within Home Assistant's 10 s (check Home
-  Assistant's log for `camera.driveway`, and what kind of camera it is).
+  Assistant's log for the driveway camera's entity, and what kind of camera it is).
 - The doorbell is **off** (`"off": true`): the new Blink doorbell doesn't ring in Home Assistant. Turn
   it back on by deleting the word once there's a sensor that does; then re-run `npm run ha-alerts`.
 - Kiosk 1.4.1 (the review fixes) is built but not on the frames: install it over Wi-Fi with `deploy-wifi.sh`,
@@ -464,6 +465,6 @@ Dates are 2026; the commit is the one the version shipped in (a commit can hold 
 - Energy `rate` and `standing` aren't set, so there's no cost estimate.
 - Name the frames with `&frame=` once they have permanent homes.
 - Phones: reinstall the web app from `homehq` so the share menu entry points at the new address.
-- Add Christmas bin dates to `bins.moved` when Rotherham publishes the 2026/27 calendar.
+- Add Christmas bin dates to `bins.moved` when the council publishes the 2026/27 calendar.
 - Idea, not started: self-hosting the Worker (Node + SQLite + a folder for photos) would remove the
   free plan's limits and let it reach Home Assistant on the LAN; about a day of adapter work.
