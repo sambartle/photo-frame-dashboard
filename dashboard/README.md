@@ -530,6 +530,38 @@ To add or remove devices later, edit `home` and deploy again. If the token is lo
 it under that user's **Profile → Security** and put the new one in `secrets.json` and run `npm run secrets`.
 To turn Home Assistant off, remove the `home` section and deploy; the Home tab disappears.
 
+### A Cloudflare Tunnel, if you don't use Nabu Casa
+
+A tunnel makes Home Assistant reachable from the Worker without opening a port on your router. The
+steps below are the usual ones; Cloudflare's tunnel guide and Home Assistant's reverse-proxy notes are
+the reference if your setup differs.
+
+1. In the Cloudflare dashboard open **Zero Trust → Networks → Tunnels → Create a tunnel**, and run the
+   connector it shows on a machine on the same network as Home Assistant. The **Cloudflared** add-on
+   in Home Assistant does this, or run `cloudflared` on another machine.
+2. Add a **public hostname**, for example `ha.example.com` (a domain on your Cloudflare account), with
+   the service **HTTP** and the address `http://<Home Assistant's address>:8123`. Use that hostname
+   as `home.url`.
+3. Tell Home Assistant to trust the tunnel's connection, or it answers `400 Bad Request`. In
+   `configuration.yaml`, then restart Home Assistant:
+
+   ```yaml
+   http:
+     use_x_forwarded_for: true
+     trusted_proxies:
+       - 127.0.0.1          # the address the connector connects from: the add-on's network
+       - 172.30.33.0/24     # or the machine's address, whichever Home Assistant logs as refused
+   ```
+
+4. Don't put Cloudflare Access in front of it, or let `/api/` through (see step 1 above).
+5. Check it, with a token from the steps above:
+
+   ```bash
+   curl -H "Authorization: Bearer $HA_TOKEN" https://ha.example.com/api/
+   ```
+
+   It should answer `{"message":"API running."}`.
+
 ### What each entity becomes
 
 | `settings.json` entry | Tile | Service calls |
@@ -567,19 +599,11 @@ the Worker reads Home Assistant itself until the next push, so nothing breaks an
 people's positions and media artwork addresses, like the cache. To check the template first, paste
 the `payload` into Home Assistant's Developer tools → Template.
 
-`alerts` turns Home Assistant state into full-screen alerts on the frame. The frames poll Home
-Assistant through the Worker every 30 seconds (every 60 on the photo screen and at night), and the
-Worker shares one read for 8 s, so without help an alert can take half a minute. **Pushed alerts** make it
-a couple of seconds: put a random `ALERT_TOKEN` in `secrets.json` (`openssl rand -hex 16`), run
-`npm run secrets`, then `npm run ha-alerts -- --with-token` prints a `secrets.yaml` line, a
-`rest_command` and an automation for your doorbell, smoke and leak entities to paste into Home
-Assistant. It calls `POST /api/alert` the moment one changes. Each frame keeps one WebSocket
-open to the Worker (a Cloudflare Durable Object, `AlertHub`), which sends the alert down every
-connection at once, so the frame hears within a moment and refreshes straight away, and nothing
-polls while it waits. A frame pings every 30 s and reconnects by itself if the connection drops;
-while it's down it checks the counter every 10 s, so an alert is never missed. The token can only
-do that (and push the states, below), not read the dashboard.
+*Known limit:* the template uses `expand()`, which replaces a group or light group with its
+members, so a group entity listed in `settings.json` would not be pushed (untested; none of the
+author's entities is a group). List the members instead, or leave the push off, if you use groups.
 
+`alerts` turns Home Assistant state into full-screen alerts on the frame. Each entry in it is one kind:
 
 - `doorbell`: when the entity changes (a binary sensor turning on, or an `event.` entity), show the
   camera with hold-to-unlock. Add `"off": true` inside it to turn the doorbell off for now (no
@@ -593,6 +617,19 @@ do that (and push the states, below), not read the dashboard.
   `carbon_monoxide` device class, get the carbon monoxide wording. The frame only shows the alert;
   it doesn't replace the alarms themselves.
 - `garageOpenMinutes`: show a banner when the garage has been open this long.
+
+**How alerts arrive.** Without help, the frames poll Home
+Assistant through the Worker every 30 seconds (every 60 on the photo screen and at night), and the
+Worker shares one read for 8 s, so without help an alert can take half a minute. **Pushed alerts** make it
+a couple of seconds: put a random `ALERT_TOKEN` in `secrets.json` (`openssl rand -hex 16`), run
+`npm run secrets`, then `npm run ha-alerts -- --with-token` prints a `secrets.yaml` line, a
+`rest_command` and an automation for your doorbell, smoke and leak entities to paste into Home
+Assistant. It calls `POST /api/alert` the moment one changes. Each frame keeps one WebSocket
+open to the Worker (a Cloudflare Durable Object, `AlertHub`), which sends the alert down every
+connection at once, so the frame hears within a moment and refreshes straight away, and nothing
+polls while it waits. A frame pings every 30 s and reconnects by itself if the connection drops;
+while it's down it checks the counter every 10 s, so an alert is never missed. The token can only
+do that (and push the states, below), not read the dashboard.
 
 `energy` adds a line to the Home card: `cost` is a sensor (or a list, added up) with today's
 spend, such as a smart meter's electricity and gas cost today. With `power` (W or kW now), the
